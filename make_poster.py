@@ -334,7 +334,7 @@ def smart_crop(pil_img, target_w, target_h, override=None):
             # クロップ高さは顔の高さ × 2.8倍（頭・余白を含むサイズ）
             desired_crop_h = fh * 2.8
             zoom = base_h / desired_crop_h
-            zoom = max(1.0, min(2.5, zoom))
+            zoom = max(1.0, min(5.0, zoom))
             crop_h_actual = base_h / zoom
             # クロップ枠の上端を「顔上端 - 余白」に設定
             desired_y1 = max(0, face_top - head_margin)
