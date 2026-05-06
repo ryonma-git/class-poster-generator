@@ -302,8 +302,8 @@ def detect_face(pil_img):
 
 def smart_crop(pil_img, target_w, target_h, override=None):
     """
-    学校個人写真向けクロップ。
-    crop_adjuster.py と同じロジック（顔検出→クロップ枠を自動算出）。
+    学校個人写真向けクロップ。crop_adjuster.py と同じロジック。
+    重要: 頭の上を確実に枠内に収める（顔の高さ × 0.5 の余白）
     override: {top_pct, left_pct, zoom} を渡すと手動クロップを優先。
     """
     w, h = pil_img.size
@@ -328,20 +328,22 @@ def smart_crop(pil_img, target_w, target_h, override=None):
         if face is not None:
             fx, fy, fw, fh = face
             face_cx = fx + fw / 2
-            face_cy = fy + fh / 2
-            # 顔の高さ × 2.0 をクロップ高さの目安に
-            desired_crop_h = fh * 2.0
+            face_top = fy
+            # 頭の上に余白（顔高さの50%）
+            head_margin = fh * 0.5
+            # クロップ高さは顔の高さ × 2.8倍（頭・余白を含むサイズ）
+            desired_crop_h = fh * 2.8
             zoom = base_h / desired_crop_h
-            zoom = max(1.0, min(3.0, zoom))
-            crop_h_calc = base_h / zoom
-            # 顔の中心を枠の40%位置に置く
-            desired_y1 = face_cy - crop_h_calc * 0.40
-            desired_y1 = max(0, min(desired_y1, h - crop_h_calc))
+            zoom = max(1.0, min(2.5, zoom))
+            crop_h_actual = base_h / zoom
+            # クロップ枠の上端を「顔上端 - 余白」に設定
+            desired_y1 = max(0, face_top - head_margin)
+            desired_y1 = min(desired_y1, h - crop_h_actual)
             top_pct = (desired_y1 / h) * 100
+            # 左右は顔の中心
             left_pct = ((face_cx - w/2) / w) * 100
             left_pct = max(-50, min(50, left_pct))
         else:
-            # 顔検出失敗：上部固定クロップ
             top_pct, left_pct, zoom = 0.0, 0.0, 1.0
 
     # ── 実クロップ範囲計算 ──
