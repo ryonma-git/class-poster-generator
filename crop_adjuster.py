@@ -268,28 +268,33 @@ def render_class_overview(class_items, current_num=None, max_w=560, thumb_w=110)
 #  名簿・写真関連
 # ════════════════════════════════════════════════════════
 def collect_photos(folder, grade, cls):
-    """フォルダ内の写真を収集。os.listdirベースで大文字小文字を確実に処理"""
+    """フォルダ内の写真を収集。JPG/JPEG/PNG を HEIC より優先する"""
     prefix = f"{grade}{cls}"
-    photos = {}
     if not folder or not os.path.isdir(folder):
-        return photos
-    valid_exts = {'.jpg', '.jpeg', '.png', '.heic'}
+        return {}
+    # 拡張子の優先度（小さいほど優先）
+    priority = {'.jpg': 0, '.jpeg': 0, '.png': 1, '.heic': 2}
+    # num -> (priority, path)
+    candidates = {}
     for fname in os.listdir(folder):
         full = os.path.join(folder, fname)
         if not os.path.isfile(full):
             continue
         stem, ext = os.path.splitext(fname)
-        if ext.lower() not in valid_exts:
+        ext_lower = ext.lower()
+        if ext_lower not in priority:
             continue
         if not stem.startswith(prefix):
             continue
         try:
             num = int(stem[len(prefix):])
-            if num not in photos:
-                photos[num] = full
         except (ValueError, TypeError):
-            pass
-    return photos
+            continue
+        p = priority[ext_lower]
+        # 既存より優先度の高い（数値の小さい）拡張子なら上書き
+        if num not in candidates or p < candidates[num][0]:
+            candidates[num] = (p, full)
+    return {num: path for num, (_, path) in candidates.items()}
 
 def find_class_folder(base, grade, cls):
     """{grade}年{cls}組のフォルダを探す。複数候補があれば写真がある方を優先"""
@@ -615,32 +620,9 @@ class CropAdjusterApp:
         MacButton(zoom_frame, "＋", self._scale_up, bg=PALETTE["neutral"],
                  fg=TEXT, font=self._font(12, True), padx=8, pady=4).pack(side="left", padx=2)
 
-        # ─── スクロール可能なメイン領域 ───
-        outer = tk.Frame(root, bg=BG)
-        outer.pack(fill="both", expand=True, padx=14, pady=12)
-
-        self.main_canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(outer, orient="vertical",
-                                 command=self.main_canvas.yview)
-        self.scrollable_frame = tk.Frame(self.main_canvas, bg=BG)
-
-        self.scrollable_frame.bind("<Configure>",
-            lambda e: self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all")))
-
-        self._scrollable_window = self.main_canvas.create_window(
-            (0, 0), window=self.scrollable_frame, anchor="nw")
-        self.main_canvas.configure(yscrollcommand=scrollbar.set)
-        self.main_canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        # Canvasの幅を変更したらフレームの幅も更新
-        def _on_canvas_config(event):
-            self.main_canvas.itemconfig(self._scrollable_window, width=event.width)
-        self.main_canvas.bind("<Configure>", _on_canvas_config)
-
-        # メイン領域
-        main = tk.Frame(self.scrollable_frame, bg=BG)
-        main.pack(fill="both", expand=True, padx=2)
+        # ─── メイン領域（スクロール廃止：固定レイアウト）───
+        main = tk.Frame(root, bg=BG)
+        main.pack(fill="both", expand=True, padx=14, pady=12)
 
         # ─ 左: クラス一覧 ─
         left = tk.Frame(main, bg=PANEL, width=200,
@@ -747,11 +729,56 @@ class CropAdjusterApp:
                  bg=PALETTE["neutral"], fg=TEXT,
                  font=self._font(12, True), padx=14, pady=8).pack(side="left", padx=4)
 
-        # ─ 右パネル ─
-        right = tk.Frame(main, bg=PANEL, width=270,
+        # ─ 右パネル（スクロール可能）─
+        # 外側コンテナ（固定幅）
+        right_container = tk.Frame(main, bg=PANEL, width=290,
                         highlightthickness=1, highlightbackground=PALETTE["border"])
-        right.pack(side="left", fill="y", padx=(10,0))
-        right.pack_propagate(False)
+        right_container.pack(side="left", fill="y", padx=(10,0))
+        right_container.pack_propagate(False)
+
+        # Canvasスクロール
+        right_canvas = tk.Canvas(right_container, bg=PANEL,
+                                highlightthickness=0)
+        right_sb = ttk.Scrollbar(right_container, orient="vertical",
+                                command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_sb.set)
+        right_canvas.pack(side="left", fill="both", expand=True)
+        right_sb.pack(side="right", fill="y")
+
+        # 内部フレーム（実際のコンテンツが入る）
+        right = tk.Frame(right_canvas, bg=PANEL)
+        right_window = right_canvas.create_window((0, 0), window=right, anchor="nw")
+
+        def _on_right_configure(event):
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+        right.bind("<Configure>", _on_right_configure)
+
+        def _on_right_canvas_configure(event):
+            right_canvas.itemconfig(right_window, width=event.width)
+        right_canvas.bind("<Configure>", _on_right_canvas_configure)
+
+        # この右パネル領域だけマウスホイールでスクロール
+        def _right_wheel(event):
+            if IS_MAC:
+                step = -1 * int(event.delta)
+            else:
+                step = -1 * int(event.delta / 120)
+            if step == 0: step = -1 if event.delta > 0 else 1
+            right_canvas.yview_scroll(step, "units")
+            return "break"
+
+        # 右パネルのCanvas、子フレーム、子ウィジェット全てに再帰的にbind
+        def _bind_wheel_recursive(widget):
+            widget.bind("<MouseWheel>", _right_wheel)
+            widget.bind("<Button-4>", lambda e: (right_canvas.yview_scroll(-1, "units"), "break")[1])
+            widget.bind("<Button-5>", lambda e: (right_canvas.yview_scroll(1, "units"), "break")[1])
+            for child in widget.winfo_children():
+                _bind_wheel_recursive(child)
+
+        # UI構築後にbindする処理を保存
+        self._right_canvas = right_canvas
+        self._right_root = right
+        self._right_bind_wheel = _bind_wheel_recursive
 
         tk.Label(right, text="ポスター上の見た目",
                  bg=PANEL, fg=PALETTE["accent_dk"], font=self._font(11, True),
@@ -790,6 +817,11 @@ class CropAdjusterApp:
                  font=self._font(11, True), padx=10, pady=10
                 ).pack(fill="x", padx=14, pady=(12,4))
 
+        MacButton(right, "⚙ 出力ウィザード", self.show_wizard,
+                 bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
+                 font=self._font(11, True), padx=10, pady=10
+                ).pack(fill="x", padx=14, pady=4)
+
         tk.Label(right, text="SHORTCUTS", bg=PANEL, fg=DIM,
                  font=self._font(10, True), anchor="w"
                 ).pack(fill="x", padx=14, pady=(20,4))
@@ -820,28 +852,14 @@ class CropAdjusterApp:
                  highlightthickness=1, highlightbackground=PALETTE["border"]
                 ).pack(fill="x", side="bottom")
 
-    # ── スクロールイベント（macOS / Win 両対応）──
-    def _bind_scroll_events(self):
-        """全ウィジェットでマウスホイール/トラックパッドスクロールを有効に"""
-        def _on_wheel(event):
-            # macOS: event.delta は1単位、Windows: 120単位
-            if IS_MAC:
-                step = -1 * int(event.delta)
-            else:
-                step = -1 * int(event.delta / 120)
-            if step == 0: step = -1 if event.delta > 0 else 1
-            self.main_canvas.yview_scroll(step, "units")
-            return "break"  # 他のスクロール処理が走るのを防ぐ
+        # ★ 右パネルの全ウィジェットにマウスホイールバインド
+        self.root.update_idletasks()
+        if hasattr(self, "_right_bind_wheel") and hasattr(self, "_right_root"):
+            self._right_bind_wheel(self._right_root)
 
-        # 全ウィジェットへの bind_all
-        self.root.bind_all("<MouseWheel>", _on_wheel)
-        # Linux X11
-        self.root.bind_all("<Button-4>", lambda e: (self.main_canvas.yview_scroll(-1, "units"), "break")[1])
-        self.root.bind_all("<Button-5>", lambda e: (self.main_canvas.yview_scroll(1, "units"), "break")[1])
-        # main_canvas 自身にも明示
-        self.main_canvas.bind("<MouseWheel>", _on_wheel)
-        self.main_canvas.bind("<Button-4>", lambda e: (self.main_canvas.yview_scroll(-1, "units"), "break")[1])
-        self.main_canvas.bind("<Button-5>", lambda e: (self.main_canvas.yview_scroll(1, "units"), "break")[1])
+    def _bind_scroll_events(self):
+        """スクロール領域は廃止したので何もしない"""
+        pass
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):
@@ -1186,6 +1204,9 @@ class CropAdjusterApp:
             idx = self.photo_nums.index(n)
             if idx < len(self.photo_nums)-1:
                 self._load(g, c, self.photo_nums[idx+1])
+            else:
+                # クラスの最終番号 → 次のクラスへジャンプ
+                self._jump_to_class(direction=+1)
 
     def prev_photo(self):
         if not self.current_key or not self.photo_nums: return
@@ -1194,6 +1215,46 @@ class CropAdjusterApp:
             idx = self.photo_nums.index(n)
             if idx > 0:
                 self._load(g, c, self.photo_nums[idx-1])
+            else:
+                # クラスの最初 → 前のクラスの最後へジャンプ
+                self._jump_to_class(direction=-1)
+
+    def _jump_to_class(self, direction=+1):
+        """次（or 前）のクラスへジャンプ。学年も跨ぐ"""
+        g, c, _ = self.current_key
+        # 現在のクラスのインデックス
+        cur_idx = -1
+        for i, (g2, c2, _) in enumerate(self.classes_list):
+            if g2 == g and c2 == c:
+                cur_idx = i; break
+        if cur_idx < 0: return
+
+        next_idx = cur_idx + direction
+        if next_idx < 0 or next_idx >= len(self.classes_list):
+            # 全体の最初/最後
+            if direction > 0:
+                self.status_var.set("  ✅ 全クラス調整完了")
+                messagebox.showinfo("完了", "全クラスの最後まで到達しました")
+            else:
+                self.status_var.set("  ⏪ 最初のクラスです")
+            return
+
+        ng, nc, nfolder = self.classes_list[next_idx]
+        # 写真情報を更新
+        self.photos = collect_photos(nfolder, ng, nc)
+        self.photo_nums = sorted(self.photos.keys())
+        if not self.photo_nums:
+            self.status_var.set(f"  ⚠ {ng}年{nc}組に写真がありません（スキップ）")
+            # さらに次へ進む
+            self.current_key = (ng, nc, 0)  # ダミーキーで次へ
+            self._jump_to_class(direction=direction)
+            return
+        # 最初の番号 (direction=+1) または最後の番号 (direction=-1)
+        target_n = self.photo_nums[0] if direction > 0 else self.photo_nums[-1]
+        self.v_grade.set(str(ng))
+        self.v_cls.set(str(nc))
+        self._load(ng, nc, target_n)
+        self.status_var.set(f"  → {ng}年{nc}組 へジャンプ")
 
     # ── クラス全員プレビュー（スクロール対応）──
     def show_class_overview(self):
@@ -1284,6 +1345,10 @@ class CropAdjusterApp:
         self._run_poster(["--grade", str(g), "--cls", str(c)],
                          f"  ⏳ {g}年{c}組のPDF再生成中...")
 
+    def show_wizard(self):
+        """出力ウィザードを開く"""
+        PosterWizard(self)
+
     def regen_all(self):
         if not messagebox.askyesno("確認", "全クラスのPDFを再生成します。よろしいですか？"):
             return
@@ -1315,6 +1380,332 @@ class CropAdjusterApp:
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("実行エラー", str(e)))
         threading.Thread(target=worker, daemon=True).start()
+
+
+# ════════════════════════════════════════════════════════
+#  ポスター出力ウィザード
+# ════════════════════════════════════════════════════════
+class PosterWizard:
+    """ポスター生成の設定をウィザード形式で行う"""
+
+    def __init__(self, parent_app):
+        self.app = parent_app
+        self.root = tk.Toplevel(parent_app.root)
+        self.root.title("ポスター出力設定")
+        self.root.configure(bg=PALETTE["bg"])
+
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        ww, wh = 720, 640
+        self.root.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
+        self.root.transient(parent_app.root)
+        self.root.grab_set()
+
+        # 設定値
+        self.v_mode  = tk.StringVar(value="class")     # class / grade-a2 / grade-a1
+        self.v_paper = tk.StringVar(value="A2")        # A2 / A1
+        self.v_cols  = tk.IntVar(value=6)
+        self.v_rows  = tk.IntVar(value=7)
+        self.v_use_teacher = tk.BooleanVar(value=False)
+        self.teachers_path = None  # CSV path
+
+        self.step = 0
+        self.steps = ["mode", "layout", "teacher", "confirm"]
+        self._build()
+
+    def _build(self):
+        # ヘッダー
+        h = tk.Frame(self.root, bg=PALETTE["primary"], height=50)
+        h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text="ポスター出力設定", bg=PALETTE["primary"], fg="#ffffff",
+                font=(system_font_family(), 14, "bold")
+                ).pack(side="left", padx=20, pady=12)
+        self.step_label = tk.Label(h, text="", bg=PALETTE["primary"],
+                                  fg="#cce4ff", font=(system_font_family(), 11))
+        self.step_label.pack(side="right", padx=20, pady=12)
+
+        # コンテンツ
+        self.content = tk.Frame(self.root, bg=PALETTE["bg"])
+        self.content.pack(fill="both", expand=True, padx=24, pady=20)
+
+        # フッター
+        footer = tk.Frame(self.root, bg=PALETTE["panel"], height=64)
+        footer.pack(fill="x", side="bottom"); footer.pack_propagate(False)
+        self.btn_back = MacButton(footer, "← 戻る", self._back,
+                                  bg=PALETTE["neutral"], fg=PALETTE["text"],
+                                  font=(system_font_family(), 12), padx=16, pady=8)
+        self.btn_back.pack(side="left", padx=14, pady=12)
+        self.btn_cancel = MacButton(footer, "キャンセル", self._cancel,
+                                   bg=PALETTE["neutral"], fg=PALETTE["text"],
+                                   font=(system_font_family(), 12), padx=16, pady=8)
+        self.btn_cancel.pack(side="left", padx=4, pady=12)
+        self.btn_next = MacButton(footer, "次へ →", self._next,
+                                 bg=PALETTE["primary"], fg="#ffffff",
+                                 font=(system_font_family(), 12, "bold"), padx=20, pady=8)
+        self.btn_next.pack(side="right", padx=14, pady=12)
+
+        self._show_step()
+
+    def _show_step(self):
+        for w in self.content.winfo_children():
+            w.destroy()
+        self.step_label.config(text=f"ステップ {self.step+1} / {len(self.steps)}")
+        s = self.steps[self.step]
+        if s == "mode":     self._step_mode()
+        elif s == "layout": self._step_layout()
+        elif s == "teacher":self._step_teacher()
+        elif s == "confirm":self._step_confirm()
+        # ボタン状態
+        self.btn_back.label.configure(text="← 戻る" if self.step > 0 else "")
+        if self.step == 0:
+            self.btn_back.pack_forget()
+        else:
+            self.btn_back.pack(side="left", padx=14, pady=12)
+        self.btn_next.label.configure(text="生成 ✓" if self.step == len(self.steps)-1 else "次へ →")
+
+    def _step_mode(self):
+        c = self.content
+        tk.Label(c, text="出力モードを選んでください",
+                bg=PALETTE["bg"], fg=PALETTE["text_strong"],
+                font=(system_font_family(), 16, "bold")
+                ).pack(anchor="w", pady=(0, 8))
+        tk.Label(c, text="ポスターの単位（クラスごと、または学年ごと）と紙のサイズを決めます",
+                bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                font=(system_font_family(), 11)
+                ).pack(anchor="w", pady=(0, 20))
+
+        options = [
+            ("class",     "A2", "クラスごと（A2横向き、デフォルト）",
+             "1クラス1枚のA2ポスター。これまで通りの出力"),
+            ("grade-a2",  "A2", "学年まとめてA2縦長",
+             "1学年の全クラスを縦長A2に集約。小規模学年向け"),
+            ("grade-a1",  "A1", "学年まとめてA1縦長",
+             "1学年の全クラスを大きなA1縦長に集約。大規模・教室掲示向け"),
+        ]
+        for mode, paper, title, desc in options:
+            row = tk.Frame(c, bg=PALETTE["panel"],
+                          highlightthickness=2,
+                          highlightbackground=PALETTE["border"])
+            row.pack(fill="x", pady=6)
+            rb = tk.Radiobutton(row, variable=self.v_mode, value=mode,
+                              bg=PALETTE["panel"],
+                              activebackground=PALETTE["panel"],
+                              command=lambda m=mode, p=paper: self._on_mode_select(m, p))
+            rb.pack(side="left", padx=14, pady=10)
+            txt = tk.Frame(row, bg=PALETTE["panel"])
+            txt.pack(side="left", fill="x", expand=True, pady=10)
+            tk.Label(txt, text=title, bg=PALETTE["panel"],
+                    fg=PALETTE["text_strong"],
+                    font=(system_font_family(), 13, "bold"),
+                    anchor="w").pack(fill="x")
+            tk.Label(txt, text=desc, bg=PALETTE["panel"],
+                    fg=PALETTE["text_dim"],
+                    font=(system_font_family(), 11),
+                    anchor="w").pack(fill="x")
+            tk.Label(row, text=paper,
+                    bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                    font=(system_font_family(), 11, "bold"),
+                    padx=10, pady=4).pack(side="right", padx=14, pady=14)
+
+    def _on_mode_select(self, mode, paper):
+        self.v_paper.set(paper)
+
+    def _step_layout(self):
+        c = self.content
+        tk.Label(c, text="レイアウトを設定",
+                bg=PALETTE["bg"], fg=PALETTE["text_strong"],
+                font=(system_font_family(), 16, "bold")
+                ).pack(anchor="w", pady=(0, 8))
+        tk.Label(c, text="コマ数（行×列）を設定します。学年モードでは行数は人数に応じて自動調整されます",
+                bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                font=(system_font_family(), 11)
+                ).pack(anchor="w", pady=(0, 20))
+
+        # プリセット
+        preset_frame = tk.Frame(c, bg=PALETTE["bg"])
+        preset_frame.pack(fill="x", pady=(0, 16))
+        tk.Label(preset_frame, text="プリセット:", bg=PALETTE["bg"],
+                fg=PALETTE["text_label"], font=(system_font_family(), 11, "bold")
+                ).pack(side="left", padx=(0,12))
+        for label, cols, rows in [("6×7 (42枠)", 6, 7),
+                                   ("5×7 (35枠)", 5, 7),
+                                   ("6×6 (36枠)", 6, 6),
+                                   ("7×7 (49枠)", 7, 7)]:
+            MacButton(preset_frame, label,
+                     command=lambda c2=cols, r2=rows: self._set_layout(c2, r2),
+                     bg=PALETTE["neutral"], fg=PALETTE["text"],
+                     font=(system_font_family(), 11), padx=12, pady=6
+                    ).pack(side="left", padx=4)
+
+        # 詳細設定
+        det = tk.Frame(c, bg=PALETTE["panel"],
+                      highlightthickness=1,
+                      highlightbackground=PALETTE["border"])
+        det.pack(fill="x", pady=10, padx=2)
+        det_inner = tk.Frame(det, bg=PALETTE["panel"], padx=20, pady=20)
+        det_inner.pack(fill="x")
+
+        for label, var, frm, to in [("列数", self.v_cols, 3, 10),
+                                     ("行数", self.v_rows, 3, 12)]:
+            row = tk.Frame(det_inner, bg=PALETTE["panel"])
+            row.pack(fill="x", pady=8)
+            tk.Label(row, text=label, bg=PALETTE["panel"],
+                    fg=PALETTE["text_label"], font=(system_font_family(), 12, "bold"),
+                    width=10, anchor="w").pack(side="left")
+            tk.Spinbox(row, from_=frm, to=to, textvariable=var,
+                      width=6, font=(system_font_family(), 13),
+                      bg=PALETTE["input_bg"], fg=PALETTE["text"],
+                      relief="flat", highlightthickness=1,
+                      highlightbackground=PALETTE["border"]
+                     ).pack(side="left", padx=8)
+
+        # 説明
+        tk.Label(c,
+                text="※ 学年モードでは、行数は1学年の人数によって自動的に拡張されます\n"
+                     "※ 紙サイズは前のステップで決まりました（{}）".format(self.v_paper.get()),
+                bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                font=(system_font_family(), 10), justify="left"
+                ).pack(anchor="w", pady=(20, 0))
+
+    def _set_layout(self, cols, rows):
+        self.v_cols.set(cols)
+        self.v_rows.set(rows)
+
+    def _step_teacher(self):
+        c = self.content
+        tk.Label(c, text="担任情報",
+                bg=PALETTE["bg"], fg=PALETTE["text_strong"],
+                font=(system_font_family(), 16, "bold")
+                ).pack(anchor="w", pady=(0, 8))
+        tk.Label(c, text="担任の情報をポスターに含めるかどうか選択します（オプション）",
+                bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                font=(system_font_family(), 11)
+                ).pack(anchor="w", pady=(0, 20))
+
+        # 含めるかチェック
+        cb_frame = tk.Frame(c, bg=PALETTE["panel"],
+                           highlightthickness=1,
+                           highlightbackground=PALETTE["border"])
+        cb_frame.pack(fill="x", pady=8, padx=2)
+        tk.Checkbutton(cb_frame, text="担任情報をポスターに含める",
+                      variable=self.v_use_teacher,
+                      bg=PALETTE["panel"], fg=PALETTE["text"],
+                      activebackground=PALETTE["panel"],
+                      selectcolor=PALETTE["accent_bg"],
+                      font=(system_font_family(), 13, "bold"),
+                      padx=20, pady=14
+                     ).pack(anchor="w")
+
+        # 説明
+        info = tk.Frame(c, bg=PALETTE["accent_bg"])
+        info.pack(fill="x", pady=20)
+        tk.Label(info, text="📝 担任情報の準備方法",
+                bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                font=(system_font_family(), 12, "bold"),
+                padx=14, pady=(10, 4), anchor="w"
+                ).pack(fill="x")
+        info_text = (
+            "担任情報を使う場合、写真フォルダに teachers.csv ファイルを作成してください。\n"
+            "形式（1行目はヘッダー）:\n"
+            "  grade,cls,name,photo\n"
+            "  1,1,山田太郎,teacher_photos/1-1.jpg\n"
+            "  1,2,佐藤花子,teacher_photos/1-2.jpg\n"
+            "  ...\n"
+            "photo列はオプション（写真がない場合は名前のみ表示）"
+        )
+        tk.Label(info, text=info_text,
+                bg=PALETTE["accent_bg"], fg=PALETTE["text"],
+                font=("Menlo", 10),
+                padx=14, pady=(0, 12), anchor="w", justify="left"
+                ).pack(fill="x")
+
+        # CSVファイル選択
+        path_frame = tk.Frame(c, bg=PALETTE["bg"])
+        path_frame.pack(fill="x", pady=8)
+        tk.Label(path_frame, text="teachers.csv のパス:",
+                bg=PALETTE["bg"], fg=PALETTE["text_label"],
+                font=(system_font_family(), 11)
+                ).pack(anchor="w")
+        # 自動検出
+        auto_path = os.path.join(self.app.base, "teachers.csv")
+        if os.path.exists(auto_path):
+            self.teachers_path = auto_path
+            tk.Label(path_frame, text=f"✓ 自動検出: {auto_path}",
+                    bg=PALETTE["bg"], fg=PALETTE["success_dk"],
+                    font=(system_font_family(), 10), anchor="w"
+                    ).pack(fill="x", pady=4)
+        else:
+            tk.Label(path_frame, text=f"（teachers.csv は写真フォルダ直下に配置してください）",
+                    bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                    font=(system_font_family(), 10), anchor="w"
+                    ).pack(fill="x", pady=4)
+
+    def _step_confirm(self):
+        c = self.content
+        tk.Label(c, text="設定の確認",
+                bg=PALETTE["bg"], fg=PALETTE["text_strong"],
+                font=(system_font_family(), 16, "bold")
+                ).pack(anchor="w", pady=(0, 8))
+        tk.Label(c, text="以下の設定でポスターを生成します",
+                bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                font=(system_font_family(), 11)
+                ).pack(anchor="w", pady=(0, 20))
+
+        mode_label = {
+            "class": "クラスごと",
+            "grade-a2": "学年まとめてA2縦長",
+            "grade-a1": "学年まとめてA1縦長",
+        }[self.v_mode.get()]
+
+        items = [
+            ("出力モード", mode_label),
+            ("紙サイズ",   self.v_paper.get()),
+            ("レイアウト", f"{self.v_cols.get()}列 × {self.v_rows.get()}行"),
+            ("担任情報",   "含める" if self.v_use_teacher.get() else "含めない"),
+        ]
+        if self.v_use_teacher.get() and self.teachers_path:
+            items.append(("teachers.csv", Path(self.teachers_path).name))
+
+        for label, value in items:
+            row = tk.Frame(c, bg=PALETTE["panel"],
+                          highlightthickness=1,
+                          highlightbackground=PALETTE["border"])
+            row.pack(fill="x", pady=4)
+            tk.Label(row, text=label, bg=PALETTE["panel"],
+                    fg=PALETTE["text_dim"],
+                    font=(system_font_family(), 11),
+                    width=14, anchor="w", padx=14, pady=10
+                    ).pack(side="left")
+            tk.Label(row, text=value, bg=PALETTE["panel"],
+                    fg=PALETTE["text_strong"],
+                    font=(system_font_family(), 12, "bold"),
+                    anchor="w", padx=14, pady=10
+                    ).pack(side="left", fill="x", expand=True)
+
+    def _back(self):
+        if self.step > 0:
+            self.step -= 1
+            self._show_step()
+
+    def _next(self):
+        if self.step < len(self.steps)-1:
+            self.step += 1
+            self._show_step()
+        else:
+            self._execute()
+
+    def _cancel(self):
+        self.root.destroy()
+
+    def _execute(self):
+        """設定でポスター生成スクリプトを呼ぶ"""
+        args = ["--mode", self.v_mode.get(), "--paper", self.v_paper.get()]
+        if self.v_mode.get() == "class":
+            args += ["--cols", str(self.v_cols.get()), "--rows", str(self.v_rows.get())]
+        if self.v_use_teacher.get() and self.teachers_path:
+            args += ["--teachers", self.teachers_path]
+        self.root.destroy()
+        self.app._run_poster(args, "  ⏳ ウィザードの設定でポスター生成中...")
 
 # ════════════════════════════════════════════════════════
 def main():

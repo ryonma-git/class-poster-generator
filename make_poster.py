@@ -175,6 +175,24 @@ def load_overrides_csv(path):
             except: pass
     return d
 
+
+def load_teachers_csv(path):
+    """teachers.csv を {(grade,cls): {name, photo}} で返す"""
+    import csv as _csv
+    d = {}
+    if not path or not os.path.exists(path):
+        return d
+    with open(path, encoding='utf-8-sig') as f:
+        for row in _csv.DictReader(f):
+            try:
+                k = (int(row['grade']), int(row['cls']))
+                d[k] = {
+                    'name':  row.get('name', '').strip(),
+                    'photo': row.get('photo', '').strip(),
+                }
+            except: pass
+    return d
+
 # ════════════════════════════════════════════
 #  フォルダ走査
 # ════════════════════════════════════════════
@@ -696,6 +714,8 @@ def main():
                     help="出力モード: class=クラスごとA2、grade-a2=学年ごとA2縦長、grade-a1=学年ごとA1縦長")
     ap.add_argument("--paper", choices=["A2", "A1"], default=None,
                     help="紙サイズを明示指定（省略時はモードから決定）")
+    ap.add_argument("--teachers", default=None,
+                    help="担任情報CSV（grade,cls,name,photo の4列）")
     args = ap.parse_args()
 
     # 名簿特定
@@ -716,6 +736,16 @@ def main():
     overrides = load_overrides_csv(overrides_path) if overrides_path else {}
     if overrides:
         print(f"  手動調整: {len(overrides)}件読み込み（{Path(overrides_path).name}）")
+
+    # 担任CSV
+    teachers_path = args.teachers
+    if not teachers_path:
+        default_t = os.path.join(args.base, "teachers.csv")
+        if os.path.exists(default_t):
+            teachers_path = default_t
+    teachers_data = load_teachers_csv(teachers_path) if teachers_path else {}
+    if teachers_data:
+        print(f"  担任情報: {len(teachers_data)}クラス分")
 
     # 紙サイズ判定
     paper = args.paper
@@ -743,8 +773,9 @@ def main():
         roster = master.get((args.grade, args.cls), {})
         if not roster:
             print(f"⚠ {args.grade}年{args.cls}組: 名簿なし"); return
+        teacher = teachers_data.get((args.grade, args.cls), {}).get('name') or args.teacher
         generate_poster(args.grade, args.cls, folder, args.out,
-                        roster, args.teacher, overrides=overrides,
+                        roster, teacher, overrides=overrides,
                         cols=args.cols, rows=args.rows, paper=paper)
     else:
         # 全クラス（クラス単位）
@@ -754,7 +785,8 @@ def main():
             roster = master.get((g, c), {})
             if not roster:
                 print(f"\n⚠ {g}年{c}組: 名簿なし（スキップ）"); continue
-            generate_poster(g, c, folder, args.out, roster, args.teacher,
+            teacher = teachers_data.get((g, c), {}).get('name') or args.teacher
+            generate_poster(g, c, folder, args.out, roster, teacher,
                           overrides=overrides, cols=args.cols, rows=args.rows,
                           paper=paper)
 
