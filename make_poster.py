@@ -509,7 +509,7 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
     lh = int(LABEL_H*P)
 
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
-    ch = ((ph - mt - hh - mb) - (rows-1)*gr) // rows
+    ch = ((ph - mt - hh - mb) - (final_rows-1)*gr) // final_rows
 
     # ── ページ描画 ──
     page = Image.new("RGB", (pw,ph), C_BG)
