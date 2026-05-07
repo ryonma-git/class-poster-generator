@@ -16,6 +16,16 @@ import os, glob, re, csv, argparse, subprocess, threading, sys, platform
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
+
+# CustomTkinter（モダンスクロール対応）
+try:
+    import customtkinter as ctk
+    HAS_CTK = True
+    ctk.set_appearance_mode("light")
+except ImportError:
+    HAS_CTK = False
+    ctk = None
+    print("⚠ customtkinter が未インストールです。pip install customtkinter を実行してください")
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import numpy as np
 import cv2
@@ -620,38 +630,32 @@ class CropAdjusterApp:
         MacButton(zoom_frame, "＋", self._scale_up, bg=PALETTE["neutral"],
                  fg=TEXT, font=self._font(12, True), padx=8, pady=4).pack(side="left", padx=2)
 
-        # ─── メイン領域（スクロール対応）───
-        main_outer = tk.Frame(root, bg=BG)
-        main_outer.pack(fill="both", expand=True)
+        # ─── メイン領域（CTkScrollableFrameで完璧なスクロール）───
+        if HAS_CTK:
+            self._main_scroll = ctk.CTkScrollableFrame(
+                root, fg_color=BG,
+                scrollbar_button_color="#a0a0a0",
+                scrollbar_button_hover_color="#606060",
+                scrollbar_fg_color="transparent"
+            )
+            self._main_scroll.pack(fill="both", expand=True, padx=14, pady=12)
+            main = tk.Frame(self._main_scroll, bg=BG)
+            main.pack(fill="both", expand=True)
+        else:
+            main = tk.Frame(root, bg=BG)
+            main.pack(fill="both", expand=True, padx=14, pady=12)
 
-        # メインCanvas + Scrollbar
-        self.main_canvas = tk.Canvas(main_outer, bg=BG, highlightthickness=0)
-        main_sb = ttk.Scrollbar(main_outer, orient="vertical",
-                               command=self.main_canvas.yview)
-        self.main_canvas.configure(yscrollcommand=main_sb.set)
-        self.main_canvas.pack(side="left", fill="both", expand=True, padx=(14,0), pady=12)
-        main_sb.pack(side="right", fill="y", pady=12)
-
-        # 内部フレーム（実際のコンテンツ）
-        main = tk.Frame(self.main_canvas, bg=BG)
-        self._main_window = self.main_canvas.create_window((0, 0), window=main, anchor="nw")
-
-        def _on_main_inner_configure(event):
-            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
-        main.bind("<Configure>", _on_main_inner_configure)
-
-        def _on_main_canvas_configure(event):
-            self.main_canvas.itemconfig(self._main_window, width=event.width)
-        self.main_canvas.bind("<Configure>", _on_main_canvas_configure)
-
-        # 後でホイールbindに使う参照
-        self._main_root = main
+        # 3列レイアウト（grid）
+        main.grid_rowconfigure(0, weight=1)
+        main.grid_columnconfigure(0, weight=0, minsize=200)
+        main.grid_columnconfigure(1, weight=1)
+        main.grid_columnconfigure(2, weight=0, minsize=290)
 
         # ─ 左: クラス一覧 ─
         left = tk.Frame(main, bg=PANEL, width=200,
                        highlightthickness=1, highlightbackground=PALETTE["border"])
-        left.pack(side="left", fill="y", padx=(0,10))
-        left.pack_propagate(False)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0,10))
+        left.grid_propagate(False)
         tk.Label(left, text="CLASSES", bg=PANEL, fg=DIM,
                  font=self._font(10, True), anchor="w"
                 ).pack(fill="x", padx=14, pady=(14,4))
@@ -672,7 +676,7 @@ class CropAdjusterApp:
 
         # ─ 中央 ─
         center = tk.Frame(main, bg=BG)
-        center.pack(side="left", fill="both", expand=True, padx=10)
+        center.grid(row=0, column=1, sticky="nsew", padx=10)
 
         self.name_var = tk.StringVar(value="左のクラス一覧から選んでください")
         tk.Label(center, textvariable=self.name_var,
@@ -752,56 +756,10 @@ class CropAdjusterApp:
                  bg=PALETTE["neutral"], fg=TEXT,
                  font=self._font(12, True), padx=14, pady=8).pack(side="left", padx=4)
 
-        # ─ 右パネル（スクロール可能）─
-        # 外側コンテナ（固定幅）
-        right_container = tk.Frame(main, bg=PANEL, width=290,
-                        highlightthickness=1, highlightbackground=PALETTE["border"])
-        right_container.pack(side="left", fill="y", padx=(10,0))
-        right_container.pack_propagate(False)
-
-        # Canvasスクロール
-        right_canvas = tk.Canvas(right_container, bg=PANEL,
-                                highlightthickness=0)
-        right_sb = ttk.Scrollbar(right_container, orient="vertical",
-                                command=right_canvas.yview)
-        right_canvas.configure(yscrollcommand=right_sb.set)
-        right_canvas.pack(side="left", fill="both", expand=True)
-        right_sb.pack(side="right", fill="y")
-
-        # 内部フレーム（実際のコンテンツが入る）
-        right = tk.Frame(right_canvas, bg=PANEL)
-        right_window = right_canvas.create_window((0, 0), window=right, anchor="nw")
-
-        def _on_right_configure(event):
-            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
-        right.bind("<Configure>", _on_right_configure)
-
-        def _on_right_canvas_configure(event):
-            right_canvas.itemconfig(right_window, width=event.width)
-        right_canvas.bind("<Configure>", _on_right_canvas_configure)
-
-        # この右パネル領域だけマウスホイールでスクロール
-        def _right_wheel(event):
-            if IS_MAC:
-                step = -1 * int(event.delta)
-            else:
-                step = -1 * int(event.delta / 120)
-            if step == 0: step = -1 if event.delta > 0 else 1
-            right_canvas.yview_scroll(step, "units")
-            return "break"
-
-        # 右パネルのCanvas、子フレーム、子ウィジェット全てに再帰的にbind
-        def _bind_wheel_recursive(widget):
-            widget.bind("<MouseWheel>", _right_wheel)
-            widget.bind("<Button-4>", lambda e: (right_canvas.yview_scroll(-1, "units"), "break")[1])
-            widget.bind("<Button-5>", lambda e: (right_canvas.yview_scroll(1, "units"), "break")[1])
-            for child in widget.winfo_children():
-                _bind_wheel_recursive(child)
-
-        # UI構築後にbindする処理を保存
-        self._right_canvas = right_canvas
-        self._right_root = right
-        self._right_bind_wheel = _bind_wheel_recursive
+        # ─ 右パネル（CTkScrollableFrameの中なので普通のFrameでOK）─
+        right = tk.Frame(main, bg=PANEL, width=290,
+                       highlightthickness=1, highlightbackground=PALETTE["border"])
+        right.grid(row=0, column=2, sticky="nsew", padx=(10,0))
 
         tk.Label(right, text="ポスター上の見た目",
                  bg=PANEL, fg=PALETTE["accent_dk"], font=self._font(11, True),
@@ -875,64 +833,15 @@ class CropAdjusterApp:
                  highlightthickness=1, highlightbackground=PALETTE["border"]
                 ).pack(fill="x", side="bottom")
 
-        # ★ ホイールバインドを再帰的に設定
-        self.root.update_idletasks()
-        self._setup_wheel_bindings()
+        # CTkScrollableFrame が自動でスクロール対応するため、追加処理不要
 
     def _bind_scroll_events(self):
         """互換性のため残す（実体は _setup_wheel_bindings）"""
         pass
 
     def _setup_wheel_bindings(self):
-        """全ウィジェットにマウスホイールイベントを再帰的にbind"""
-        # メイン用ハンドラ
-        def _main_wheel(e):
-            if IS_MAC:
-                step = -1 * int(e.delta)
-            else:
-                step = -1 * int(e.delta / 120)
-            if step == 0: step = -1 if e.delta > 0 else 1
-            self.main_canvas.yview_scroll(step, "units")
-            return "break"
-        # 右パネル用ハンドラ
-        def _right_wheel(e):
-            if IS_MAC:
-                step = -1 * int(e.delta)
-            else:
-                step = -1 * int(e.delta / 120)
-            if step == 0: step = -1 if e.delta > 0 else 1
-            self._right_canvas.yview_scroll(step, "units")
-            return "break"
-
-        def _bind_recursive(widget, handler, canvas):
-            try:
-                widget.bind("<MouseWheel>", handler)
-                widget.bind("<Button-4>",
-                    lambda e: (canvas.yview_scroll(-1, "units"), "break")[1])
-                widget.bind("<Button-5>",
-                    lambda e: (canvas.yview_scroll(1, "units"), "break")[1])
-            except: pass
-            for child in widget.winfo_children():
-                _bind_recursive(child, handler, canvas)
-
-        # まずメイン全体にメインスクロール用ハンドラ
-        if hasattr(self, "_main_root"):
-            _bind_recursive(self._main_root, _main_wheel, self.main_canvas)
-        # main_canvas 自身にも
-        self.main_canvas.bind("<MouseWheel>", _main_wheel)
-        self.main_canvas.bind("<Button-4>",
-            lambda e: (self.main_canvas.yview_scroll(-1, "units"), "break")[1])
-        self.main_canvas.bind("<Button-5>",
-            lambda e: (self.main_canvas.yview_scroll(1, "units"), "break")[1])
-
-        # 次に右パネル内だけ右パネル用ハンドラで上書き（後勝ち）
-        if hasattr(self, "_right_root") and hasattr(self, "_right_canvas"):
-            _bind_recursive(self._right_root, _right_wheel, self._right_canvas)
-            self._right_canvas.bind("<MouseWheel>", _right_wheel)
-            self._right_canvas.bind("<Button-4>",
-                lambda e: (self._right_canvas.yview_scroll(-1, "units"), "break")[1])
-            self._right_canvas.bind("<Button-5>",
-                lambda e: (self._right_canvas.yview_scroll(1, "units"), "break")[1])
+        """CTkScrollableFrame が自動対応するため、互換性のため残すのみ"""
+        pass
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):

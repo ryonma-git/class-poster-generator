@@ -74,7 +74,7 @@ echo -e "  ${GREEN}✓${NC} python: $PYTHON_BIN"
 echo -e "  ライブラリ確認..."
 MISSING=$("$PYTHON_BIN" -c "
 import importlib
-mods = ['PIL', 'cv2', 'numpy', 'pandas', 'openpyxl', 'reportlab', 'pillow_heif']
+mods = ['PIL', 'cv2', 'numpy', 'pandas', 'openpyxl', 'reportlab', 'pillow_heif', 'customtkinter']
 missing = []
 for m in mods:
     try: importlib.import_module(m)
@@ -85,7 +85,7 @@ print(' '.join(missing))
 if [ -n "$MISSING" ]; then
     echo -e "  ${YELLOW}不足: $MISSING${NC}"
     echo -e "  ${BLUE}インストール中...${NC}"
-    "$PIP_BIN" install Pillow opencv-python numpy pandas openpyxl reportlab pillow-heif xlrd==1.2.0
+    "$PIP_BIN" install Pillow opencv-python numpy pandas openpyxl reportlab pillow-heif xlrd==1.2.0 customtkinter
 fi
 
 # ── 5. 起動 ──
