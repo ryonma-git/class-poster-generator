@@ -268,32 +268,51 @@ def render_class_overview(class_items, current_num=None, max_w=560, thumb_w=110)
 #  名簿・写真関連
 # ════════════════════════════════════════════════════════
 def collect_photos(folder, grade, cls):
+    """フォルダ内の写真を収集。os.listdirベースで大文字小文字を確実に処理"""
     prefix = f"{grade}{cls}"
     photos = {}
-    for ext in ['.jpg','.jpeg','.JPG','.JPEG','.png','.PNG']:
-        for f in glob.glob(os.path.join(folder, f"{prefix}*{ext}")):
-            stem = Path(f).stem
-            if not stem.startswith(prefix): continue
-            try:
-                num = int(stem[len(prefix):])
-                if num not in photos: photos[num] = f
-            except: pass
+    if not folder or not os.path.isdir(folder):
+        return photos
+    valid_exts = {'.jpg', '.jpeg', '.png', '.heic'}
+    for fname in os.listdir(folder):
+        full = os.path.join(folder, fname)
+        if not os.path.isfile(full):
+            continue
+        stem, ext = os.path.splitext(fname)
+        if ext.lower() not in valid_exts:
+            continue
+        if not stem.startswith(prefix):
+            continue
+        try:
+            num = int(stem[len(prefix):])
+            if num not in photos:
+                photos[num] = full
+        except (ValueError, TypeError):
+            pass
     return photos
 
 def find_class_folder(base, grade, cls):
+    """{grade}年{cls}組のフォルダを探す。複数候補があれば写真がある方を優先"""
+    candidates = []
     for root, dirs, files in os.walk(base):
-        if not any(f.lower().endswith(('.jpg','.jpeg','.png','.heic')) for f in files):
-            continue
         name = Path(root).name
+        # 「N年M組」形式
         m = re.search(r'(\d+)\s*年\s*(\d+)\s*組', name)
         if m and int(m.group(1))==grade and int(m.group(2))==cls:
-            return root
+            candidates.append(root)
+            continue
+        # 「M組」のみ（親が「N年」）
         m2 = re.search(r'(\d+)\s*組', name)
         if m2 and int(m2.group(1))==cls:
             parent = str(Path(root).parent)
             if re.search(rf'{grade}\s*年', parent):
-                return root
-    return None
+                candidates.append(root)
+    # 写真があるフォルダを優先
+    for c in candidates:
+        if collect_photos(c, grade, cls):
+            return c
+    # なければ最初の候補
+    return candidates[0] if candidates else None
 
 def find_all_classes(base):
     results = []
@@ -786,10 +805,12 @@ class CropAdjusterApp:
                  justify="left", anchor="w"
                 ).pack(fill="x", padx=14)
 
-        tk.Label(right, text="クロップ枠を直接ドラッグでも移動できます",
+        tk.Label(right, text="枠の中=移動 / ●角=ズーム",
                  bg=PANEL, fg=DIM, font=self._font(9),
                  wraplength=240, justify="left"
-                ).pack(fill="x", padx=14, pady=(8,14))
+                ).pack(fill="x", padx=14, pady=(8,4))
+        # 下部に余白を追加
+        tk.Frame(right, bg=PANEL, height=24).pack(fill="x")
 
         # ステータスバー
         self.status_var = tk.StringVar(value="")
@@ -803,18 +824,24 @@ class CropAdjusterApp:
     def _bind_scroll_events(self):
         """全ウィジェットでマウスホイール/トラックパッドスクロールを有効に"""
         def _on_wheel(event):
-            # macOS: event.delta は ±1〜10
-            # Windows: event.delta は ±120
+            # macOS: event.delta は1単位、Windows: 120単位
             if IS_MAC:
                 step = -1 * int(event.delta)
             else:
                 step = -1 * int(event.delta / 120)
+            if step == 0: step = -1 if event.delta > 0 else 1
             self.main_canvas.yview_scroll(step, "units")
-        # bind_all で全領域をカバー
+            return "break"  # 他のスクロール処理が走るのを防ぐ
+
+        # 全ウィジェットへの bind_all
         self.root.bind_all("<MouseWheel>", _on_wheel)
         # Linux X11
-        self.root.bind_all("<Button-4>", lambda e: self.main_canvas.yview_scroll(-1, "units"))
-        self.root.bind_all("<Button-5>", lambda e: self.main_canvas.yview_scroll(1, "units"))
+        self.root.bind_all("<Button-4>", lambda e: (self.main_canvas.yview_scroll(-1, "units"), "break")[1])
+        self.root.bind_all("<Button-5>", lambda e: (self.main_canvas.yview_scroll(1, "units"), "break")[1])
+        # main_canvas 自身にも明示
+        self.main_canvas.bind("<MouseWheel>", _on_wheel)
+        self.main_canvas.bind("<Button-4>", lambda e: (self.main_canvas.yview_scroll(-1, "units"), "break")[1])
+        self.main_canvas.bind("<Button-5>", lambda e: (self.main_canvas.yview_scroll(1, "units"), "break")[1])
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):
