@@ -620,9 +620,32 @@ class CropAdjusterApp:
         MacButton(zoom_frame, "＋", self._scale_up, bg=PALETTE["neutral"],
                  fg=TEXT, font=self._font(12, True), padx=8, pady=4).pack(side="left", padx=2)
 
-        # ─── メイン領域（スクロール廃止：固定レイアウト）───
-        main = tk.Frame(root, bg=BG)
-        main.pack(fill="both", expand=True, padx=14, pady=12)
+        # ─── メイン領域（スクロール対応）───
+        main_outer = tk.Frame(root, bg=BG)
+        main_outer.pack(fill="both", expand=True)
+
+        # メインCanvas + Scrollbar
+        self.main_canvas = tk.Canvas(main_outer, bg=BG, highlightthickness=0)
+        main_sb = ttk.Scrollbar(main_outer, orient="vertical",
+                               command=self.main_canvas.yview)
+        self.main_canvas.configure(yscrollcommand=main_sb.set)
+        self.main_canvas.pack(side="left", fill="both", expand=True, padx=(14,0), pady=12)
+        main_sb.pack(side="right", fill="y", pady=12)
+
+        # 内部フレーム（実際のコンテンツ）
+        main = tk.Frame(self.main_canvas, bg=BG)
+        self._main_window = self.main_canvas.create_window((0, 0), window=main, anchor="nw")
+
+        def _on_main_inner_configure(event):
+            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
+        main.bind("<Configure>", _on_main_inner_configure)
+
+        def _on_main_canvas_configure(event):
+            self.main_canvas.itemconfig(self._main_window, width=event.width)
+        self.main_canvas.bind("<Configure>", _on_main_canvas_configure)
+
+        # 後でホイールbindに使う参照
+        self._main_root = main
 
         # ─ 左: クラス一覧 ─
         left = tk.Frame(main, bg=PANEL, width=200,
@@ -852,14 +875,64 @@ class CropAdjusterApp:
                  highlightthickness=1, highlightbackground=PALETTE["border"]
                 ).pack(fill="x", side="bottom")
 
-        # ★ 右パネルの全ウィジェットにマウスホイールバインド
+        # ★ ホイールバインドを再帰的に設定
         self.root.update_idletasks()
-        if hasattr(self, "_right_bind_wheel") and hasattr(self, "_right_root"):
-            self._right_bind_wheel(self._right_root)
+        self._setup_wheel_bindings()
 
     def _bind_scroll_events(self):
-        """スクロール領域は廃止したので何もしない"""
+        """互換性のため残す（実体は _setup_wheel_bindings）"""
         pass
+
+    def _setup_wheel_bindings(self):
+        """全ウィジェットにマウスホイールイベントを再帰的にbind"""
+        # メイン用ハンドラ
+        def _main_wheel(e):
+            if IS_MAC:
+                step = -1 * int(e.delta)
+            else:
+                step = -1 * int(e.delta / 120)
+            if step == 0: step = -1 if e.delta > 0 else 1
+            self.main_canvas.yview_scroll(step, "units")
+            return "break"
+        # 右パネル用ハンドラ
+        def _right_wheel(e):
+            if IS_MAC:
+                step = -1 * int(e.delta)
+            else:
+                step = -1 * int(e.delta / 120)
+            if step == 0: step = -1 if e.delta > 0 else 1
+            self._right_canvas.yview_scroll(step, "units")
+            return "break"
+
+        def _bind_recursive(widget, handler, canvas):
+            try:
+                widget.bind("<MouseWheel>", handler)
+                widget.bind("<Button-4>",
+                    lambda e: (canvas.yview_scroll(-1, "units"), "break")[1])
+                widget.bind("<Button-5>",
+                    lambda e: (canvas.yview_scroll(1, "units"), "break")[1])
+            except: pass
+            for child in widget.winfo_children():
+                _bind_recursive(child, handler, canvas)
+
+        # まずメイン全体にメインスクロール用ハンドラ
+        if hasattr(self, "_main_root"):
+            _bind_recursive(self._main_root, _main_wheel, self.main_canvas)
+        # main_canvas 自身にも
+        self.main_canvas.bind("<MouseWheel>", _main_wheel)
+        self.main_canvas.bind("<Button-4>",
+            lambda e: (self.main_canvas.yview_scroll(-1, "units"), "break")[1])
+        self.main_canvas.bind("<Button-5>",
+            lambda e: (self.main_canvas.yview_scroll(1, "units"), "break")[1])
+
+        # 次に右パネル内だけ右パネル用ハンドラで上書き（後勝ち）
+        if hasattr(self, "_right_root") and hasattr(self, "_right_canvas"):
+            _bind_recursive(self._right_root, _right_wheel, self._right_canvas)
+            self._right_canvas.bind("<MouseWheel>", _right_wheel)
+            self._right_canvas.bind("<Button-4>",
+                lambda e: (self._right_canvas.yview_scroll(-1, "units"), "break")[1])
+            self._right_canvas.bind("<Button-5>",
+                lambda e: (self._right_canvas.yview_scroll(1, "units"), "break")[1])
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):
