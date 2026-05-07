@@ -9,7 +9,7 @@ REPO_DIR="$HOME/Projects/class-poster-generator"
 PHOTO_DIR="/Users/ryon/My M2/帰国後/石橋小26/【26年度】_クラス個別写真"
 VENV_PATH="$PHOTO_DIR/.venv"
 PYTHON_BIN="$VENV_PATH/bin/python3"
-PIP_BIN="$VENV_PATH/bin/pip"
+# pip は python -m pip 経由で呼ぶ（venv移動への耐性）
 
 GREEN='\033[0;32m'; BLUE='\033[0;34m'
 YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -85,7 +85,7 @@ print(' '.join(missing))
 if [ -n "$MISSING" ]; then
     echo -e "  ${YELLOW}不足: $MISSING${NC}"
     echo -e "  ${BLUE}インストール中...${NC}"
-    "$PIP_BIN" install Pillow opencv-python numpy pandas openpyxl reportlab pillow-heif xlrd==1.2.0 customtkinter
+    "$PYTHON_BIN" -m pip install Pillow opencv-python numpy pandas openpyxl reportlab pillow-heif xlrd==1.2.0 customtkinter
 fi
 
 # ── 5. 起動 ──
