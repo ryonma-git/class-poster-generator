@@ -319,7 +319,7 @@ def detect_face(pil_img):
                     return sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
     return None
 
-def smart_crop(pil_img, target_w, target_h, override=None):
+def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0):
     """
     学校個人写真向けクロップ。crop_adjuster.py と同じロジック。
     重要: 頭の上を確実に枠内に収める（顔の高さ × 0.5 の余白）
@@ -341,6 +341,7 @@ def smart_crop(pil_img, target_w, target_h, override=None):
         top_pct  = override.get('top_pct',  0)
         left_pct = override.get('left_pct', 0)
         zoom     = override.get('zoom',     1.0)
+        zoom = max(1.0, min(5.0, zoom * zoom_multiplier))
     else:
         # 自動：顔検出
         face = detect_face(pil_img)
@@ -354,6 +355,8 @@ def smart_crop(pil_img, target_w, target_h, override=None):
             desired_crop_h = fh * 2.8
             zoom = base_h / desired_crop_h
             zoom = max(1.0, min(5.0, zoom))
+            # 全体ズーム倍率を適用
+            zoom = max(1.0, min(5.0, zoom * zoom_multiplier))
             crop_h_actual = base_h / zoom
             # クロップ枠の上端を「顔上端 - 余白」に設定
             desired_y1 = max(0, face_top - head_margin)
@@ -412,7 +415,7 @@ def rmask(size, r, top=True, bot=True):
 # ════════════════════════════════════════════
 #  生徒セル描画
 # ════════════════════════════════════════════
-def make_student_cell(img_path, cw, ch, lh, num, name, override=None):
+def make_student_cell(img_path, cw, ch, lh, num, name, override=None, zoom_multiplier=1.0):
     R  = 18
     ph = ch - lh
 
@@ -424,7 +427,7 @@ def make_student_cell(img_path, cw, ch, lh, num, name, override=None):
     if img_path and os.path.exists(img_path):
         try:
             pil   = fix_exif_rotation(Image.open(img_path))
-            photo = smart_crop(pil, cw, ph, override=override)
+            photo = smart_crop(pil, cw, ph, override=override, zoom_multiplier=zoom_multiplier)
         except:
             photo = make_placeholder(cw, ph)
     else:
@@ -476,7 +479,7 @@ def make_teacher_cell(cw, ch, lh, name):
 # ════════════════════════════════════════════
 #  ポスター生成（1クラス）
 # ════════════════════════════════════════════
-def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A2'):
+def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A2', zoom_multiplier=1.0):
     print(f"\n▶ {grade}年{cls}組  [{Path(folder).name}]")
     nums  = sorted(roster.keys())
     total = len(nums)
@@ -543,7 +546,7 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
             ov = (overrides or {}).get((grade, cls, val))
             ci = make_student_cell(photos.get(val), cw, ch, lh, val,
                                    roster.get(val, f"{val:02d}番"),
-                                   override=ov)
+                                   override=ov, zoom_multiplier=zoom_multiplier)
         page.paste(ci.convert("RGB"), (x,y), ci)
 
     # フッター
@@ -563,37 +566,36 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
 
 
 # ════════════════════════════════════════════
-#  学年全クラス縦長ポスター
+#  学年全クラス ロール紙ポスター
+#  （A2/A1個別と同じレイアウト・セルサイズを保ったまま縦に連結）
 # ════════════════════════════════════════════
 def generate_grade_poster(grade, classes_data, out_dir, roster_master,
-                          paper="A1", overrides=None):
+                          paper="A2", overrides=None, zoom_multiplier=1.0):
     """
-    学年単位のポスター生成
-    classes_data: [(cls, folder), ...]
-    paper: "A1" or "A2" - 縦長レイアウト
+    学年単位ポスター（ロール紙縦長出力）。
+    paper="A2" → 幅594mm（A2の長辺）のロール
+    paper="A1" → 幅841mm（A1の長辺）のロール
+    各クラスのレイアウトは A2個別ポスター（420×594mm）と完全に同じ。
+    そのレイアウトを上下に並べて、ロール紙幅に中央配置する。
     """
-    print(f"\n▶ {grade}年生 全クラスポスター ({paper}縦長)")
+    print(f"\n▶ {grade}年生 ロール紙ポスター (幅{paper}＝", end="")
+    if paper == "A1":
+        roll_width_mm = 841   # A1の長辺
+    else:
+        roll_width_mm = 594   # A2の長辺
+    print(f"{roll_width_mm}mm)")
+
     if not classes_data:
         print("  ⚠ クラスデータなし"); return
 
-    DPI = 150; P = DPI/72.0
-    if paper == "A1":
-        pw, ph = int(A1_W*P), int(A1_H*P)
-        page_w_pt, page_h_pt = A1_W, A1_H
-    else:
-        pw, ph = int(A2_W*P), int(A2_H*P)
-        page_w_pt, page_h_pt = A2_W, A2_H
+    # ── 1クラス分のサイズ（A2個別と同じ）──
+    # A2 = 420mm × 594mm （420が短辺＝幅、594が長辺＝高さ）
+    class_w_mm = 420
+    class_h_mm = 594
 
-    mx = int(MARGIN_X*P)
-    mt = int(MARGIN_TOP*P)
-    mb = int(MARGIN_BOT*P)
-    hh = int(HEADER_H*P)
-    gc = int(GAP_COL*P)
-    gr = int(GAP_ROW*P)
-    lh = int(LABEL_H*P)
-    section_gap = int(20 * MM * P)  # クラス間の隙間
+    DPI = 150; P = DPI / 72.0
 
-    # 各クラスのデータ取得
+    # クラスデータ準備
     class_blocks = []
     total_students = 0
     for cls, folder in sorted(classes_data):
@@ -610,28 +612,100 @@ def generate_grade_poster(grade, classes_data, out_dir, roster_master,
     if not class_blocks:
         print("  ⚠ 名簿データのあるクラスがありません"); return
 
-    # 列数: 各クラスの最大人数 / 期待行数 で計算
-    # シンプルに固定で6列
+    # ── ロール紙のサイズ（mm単位 → ポイント）──
+    GAP_BETWEEN_CLASSES_MM = 30
+    HEADER_TOP_MM = 0   # 全体ヘッダーは省略（各クラスにヘッダーがあるため）
+
+    pw_mm = roll_width_mm
+    ph_mm = (class_h_mm * len(class_blocks)
+             + GAP_BETWEEN_CLASSES_MM * (len(class_blocks) - 1)
+             + HEADER_TOP_MM)
+
+    # ピクセルサイズ（150dpi）
+    pw = int(pw_mm * MM * P)
+    ph = int(ph_mm * MM * P)
+    page_w_pt = pw_mm * MM
+    page_h_pt = ph_mm * MM
+
+    # 1クラスエリアのピクセルサイズ
+    class_w_px = int(class_w_mm * MM * P)
+    class_h_px = int(class_h_mm * MM * P)
+    gap_px = int(GAP_BETWEEN_CLASSES_MM * MM * P)
+
+    # クラスは中央寄せ → 左右に余白
+    class_x_offset = (pw - class_w_px) // 2
+
+    # ── ページキャンバス ──
+    page = Image.new("RGB", (pw, ph), C_BG)
+    d = ImageDraw.Draw(page)
+
+    # 背景グリッド
+    for xi in range(0, pw, 40): d.line([(xi,0),(xi,ph)], fill=(220,228,238), width=1)
+    for yi in range(0, ph, 40): d.line([(0,yi),(pw,yi)], fill=(220,228,238), width=1)
+
+    # 各クラスを縦に並べる（個別A2ポスターを再利用）
+    for idx, blk in enumerate(class_blocks):
+        cls = blk["cls"]
+        # 個別A2ポスターを生成（同じロジック）
+        class_img = _render_single_class_image(
+            grade, cls, blk["folder"], blk["roster"], blk["photos"],
+            None, overrides, zoom_multiplier,
+            target_w=class_w_px, target_h=class_h_px)
+
+        # 縦位置
+        y_pos = idx * (class_h_px + gap_px)
+        page.paste(class_img, (class_x_offset, y_pos))
+
+        # クラス間の区切り線（最後以外）
+        if idx < len(class_blocks) - 1:
+            sep_y = y_pos + class_h_px + gap_px // 2
+            d.line([(int(pw*0.1), sep_y), (int(pw*0.9), sep_y)],
+                   fill=C_ACCENT, width=4)
+
+    # 出力
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, f"{grade}年生_ロール紙_{paper}幅{roll_width_mm}mm.pdf")
+    buf = io.BytesIO()
+    page.save(buf, format="PNG", dpi=(DPI, DPI))
+    buf.seek(0)
+    c = canvas.Canvas(out, pagesize=(page_w_pt, page_h_pt))
+    c.drawImage(ImageReader(buf), 0, 0, width=page_w_pt, height=page_h_pt)
+    c.save()
+    print(f"  ✅ {len(class_blocks)}クラス {total_students}名 → {Path(out).name}")
+    print(f"     仕上がりサイズ: {pw_mm}mm × {ph_mm}mm")
+
+
+def _render_single_class_image(grade, cls, folder, roster, photos,
+                                teacher, overrides, zoom_multiplier,
+                                target_w, target_h):
+    """
+    1クラス分のポスターをPIL Imageとして返す（PDF化はしない）。
+    個別A2ポスター generate_poster と同じレイアウトロジック。
+    """
+    nums = sorted(roster.keys())
+    total = len(nums)
+
+    cells_total = total + (1 if teacher else 0)
     use_cols = DEFAULT_COLS
+    use_rows = DEFAULT_ROWS
+    auto_rows = math.ceil(cells_total / use_cols)
+    final_rows = max(auto_rows, use_rows)
 
-    # 各クラスのセクション高さを計算
-    available_h = ph - mt - hh - mb - section_gap*(len(class_blocks)-1)
-    section_header_h = int(15 * MM * P)
+    # 各値はターゲットサイズに合わせて再スケール（A2基準のまま）
+    DPI = 150; P = DPI / 72.0
+    pw, ph = target_w, target_h
+    mx = int(MARGIN_X * P)
+    mt = int(MARGIN_TOP * P)
+    mb = int(MARGIN_BOT * P)
+    hh = int(HEADER_H * P)
+    gc = int(GAP_COL * P)
+    gr = int(GAP_ROW * P)
+    lh = int(LABEL_H * P)
 
-    # 全クラスの行数合計
-    total_rows = 0
-    for blk in class_blocks:
-        rows_in_class = math.ceil(len(blk["nums"]) / use_cols)
-        blk["rows"] = rows_in_class
-        total_rows += rows_in_class
-
-    # セルサイズ算出
-    grid_total_h = available_h - section_header_h * len(class_blocks)
-    grid_gap_h = gr * (total_rows - len(class_blocks))  # クラス内の行間隙
-    ch = (grid_total_h - grid_gap_h) // total_rows
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
+    ch = ((ph - mt - hh - mb) - (final_rows-1)*gr) // final_rows
 
-    # ── ページ描画 ──
+    # 1クラス分のキャンバス
     page = Image.new("RGB", (pw, ph), C_BG)
     d = ImageDraw.Draw(page)
     for xi in range(0, pw, 40): d.line([(xi,0),(xi,ph)], fill=(220,228,238), width=1)
@@ -644,53 +718,28 @@ def generate_grade_poster(grade, classes_data, out_dir, roster_master,
     d.rectangle([0,ht,int(pw*0.28),ht+hh-ah], fill=C_HDR_SUB)
     cy_ = ht + (hh-ah)//2
     d.text((int(pw*0.32), cy_),
-           f"{grade}年生　全クラス個人写真",
+           f"{grade}年　{cls}組　個人写真一覧",
            font=get_font(int(hh*0.38)), fill=(255,255,255), anchor="lm")
-    d.text((pw-mx, cy_), f"{len(class_blocks)}クラス {total_students}名",
+    d.text((pw-mx, cy_), f"全{total}名",
            font=get_font(int(hh*0.24)), fill=C_ACCENT, anchor="rm")
 
-    # 各クラスを描画
-    cur_y = mt + hh + int(4*P)
-    for blk in class_blocks:
-        cls = blk["cls"]
-        # クラスヘッダー
-        d.rectangle([mx, cur_y, pw-mx, cur_y+section_header_h],
-                    fill=C_HDR_SUB)
-        d.text((mx+int(8*P), cur_y+section_header_h//2),
-               f"{grade}年 {cls}組　({len(blk['nums'])}名)",
-               font=get_font(int(section_header_h*0.55)),
-               fill=(255,255,255), anchor="lm")
-        cur_y += section_header_h + int(4*P)
+    # グリッド
+    gt = mt + hh + int(4*P)
+    cells = ([("t", teacher)] if teacher else []) + [("s", n) for n in nums]
+    for idx, (kind, val) in enumerate(cells):
+        col = idx % use_cols; row = idx // use_cols
+        x = mx + col*(cw+gc); y = gt + row*(ch+gr)
+        if kind == "t":
+            ci = make_teacher_cell(cw, ch, lh, val)
+        else:
+            ov = (overrides or {}).get((grade, cls, val))
+            ci = make_student_cell(photos.get(val), cw, ch, lh, val,
+                                   roster.get(val, f"{val:02d}番"),
+                                   override=ov, zoom_multiplier=zoom_multiplier)
+        page.paste(ci.convert("RGB"), (x, y), ci)
 
-        # 生徒セル
-        for idx, num in enumerate(blk["nums"]):
-            col = idx % use_cols
-            row = idx // use_cols
-            x = mx + col*(cw+gc)
-            y = cur_y + row*(ch+gr)
-            ov = (overrides or {}).get((grade, cls, num))
-            ci = make_student_cell(blk["photos"].get(num),
-                                   cw, ch, lh, num,
-                                   blk["roster"].get(num, f"{num:02d}番"),
-                                   override=ov)
-            page.paste(ci.convert("RGB"), (x, y), ci)
+    return page
 
-        cur_y += blk["rows"] * (ch + gr) + section_gap
-
-    # フッター
-    d.text((pw//2, ph-int(4*P)),
-           f"{grade}年生　全クラス個人写真",
-           font=get_font(int(8*P)), fill=(160,170,185), anchor="mb")
-
-    os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, f"{grade}年生_全クラス_{paper}.pdf")
-    buf = io.BytesIO()
-    page.save(buf, format="PNG", dpi=(DPI,DPI))
-    buf.seek(0)
-    c = canvas.Canvas(out, pagesize=(page_w_pt, page_h_pt))
-    c.drawImage(ImageReader(buf), 0, 0, width=page_w_pt, height=page_h_pt)
-    c.save()
-    print(f"  ✅ {total_students}名 → {Path(out).name}")
 
 # ════════════════════════════════════════════
 #  メイン
@@ -716,6 +765,8 @@ def main():
                     help="紙サイズを明示指定（省略時はモードから決定）")
     ap.add_argument("--teachers", default=None,
                     help="担任情報CSV（grade,cls,name,photo の4列）")
+    ap.add_argument("--zoom-multiplier", type=float, default=1.0,
+                    help="全体ズーム倍率（1.0=標準、1.3=30%%アップ、0.8=20%%引き）")
     args = ap.parse_args()
 
     # 名簿特定
@@ -766,7 +817,8 @@ def main():
         print(f"学年単位ポスター生成: {len(grades_to_process)}学年（{paper}縦長）")
         for g in grades_to_process:
             generate_grade_poster(g, by_grade[g], args.out, master,
-                                  paper=paper, overrides=overrides)
+                                  paper=paper, overrides=overrides,
+                                  zoom_multiplier=args.zoom_multiplier)
     elif args.grade and args.cls:
         # 単一クラス
         folder = find_class_folder(args.base, args.grade, args.cls)
@@ -776,7 +828,8 @@ def main():
         teacher = teachers_data.get((args.grade, args.cls), {}).get('name') or args.teacher
         generate_poster(args.grade, args.cls, folder, args.out,
                         roster, teacher, overrides=overrides,
-                        cols=args.cols, rows=args.rows, paper=paper)
+                        cols=args.cols, rows=args.rows, paper=paper,
+                        zoom_multiplier=args.zoom_multiplier)
     else:
         # 全クラス（クラス単位）
         classes = find_all_classes(args.base)
@@ -788,7 +841,7 @@ def main():
             teacher = teachers_data.get((g, c), {}).get('name') or args.teacher
             generate_poster(g, c, folder, args.out, roster, teacher,
                           overrides=overrides, cols=args.cols, rows=args.rows,
-                          paper=paper)
+                          paper=paper, zoom_multiplier=args.zoom_multiplier)
 
     print("\n完了 ✅")
 

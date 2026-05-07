@@ -770,6 +770,28 @@ class CropAdjusterApp:
                                      width=self.POSTER_W, height=cell_h)
         self.poster_label.pack(padx=14)
 
+        # ─ 全体ズーム倍率 ─
+        tk.Label(right, text="GLOBAL ZOOM", bg=PANEL, fg=DIM,
+                 font=self._font(10, True), anchor="w"
+                ).pack(fill="x", padx=14, pady=(20,4))
+        tk.Label(right, text="全クラス共通の追加ズーム",
+                 bg=PANEL, fg=PALETTE["text_label"], font=self._font(10), anchor="w"
+                ).pack(fill="x", padx=14)
+        self.v_global_zoom = tk.DoubleVar(value=1.0)
+        zoom_row = tk.Frame(right, bg=PANEL)
+        zoom_row.pack(fill="x", padx=14, pady=(4,2))
+        tk.Scale(zoom_row, from_=0.7, to=2.0, resolution=0.05,
+                 orient="horizontal", variable=self.v_global_zoom,
+                 length=240, bg=PANEL, fg=TEXT,
+                 troughcolor=PALETTE["panel_alt"],
+                 highlightthickness=0, relief="flat",
+                 activebackground=PALETTE["accent"],
+                 showvalue=True, font=self._font(10, True),
+                 takefocus=0).pack()
+        tk.Label(right, text="(0.7=引き  1.0=標準  2.0=2倍アップ)",
+                 bg=PANEL, fg=DIM, font=self._font(9), anchor="w"
+                ).pack(fill="x", padx=14, pady=(0,8))
+
         tk.Label(right, text="ACTIONS", bg=PANEL, fg=DIM,
                  font=self._font(10, True), anchor="w"
                 ).pack(fill="x", padx=14, pady=(20,4))
@@ -1338,6 +1360,11 @@ class CropAdjusterApp:
 
     def _run_poster(self, extra_args, msg):
         self.status_var.set(msg)
+        # 全体ズーム倍率を追加
+        if hasattr(self, 'v_global_zoom'):
+            zm = float(self.v_global_zoom.get())
+            if abs(zm - 1.0) > 0.01:
+                extra_args = list(extra_args) + ["--zoom-multiplier", f"{zm:.2f}"]
         candidates = [
             os.path.join(self.base, "make_poster.py"),
             os.path.join(self.base, "make_poster_v8.py"),
@@ -1451,18 +1478,18 @@ class PosterWizard:
                 bg=PALETTE["bg"], fg=PALETTE["text_strong"],
                 font=(system_font_family(), 16, "bold")
                 ).pack(anchor="w", pady=(0, 8))
-        tk.Label(c, text="ポスターの単位（クラスごと、または学年ごと）と紙のサイズを決めます",
+        tk.Label(c, text="ポスターの単位（クラスごと=A2 / 学年=ロール紙）を決めます",
                 bg=PALETTE["bg"], fg=PALETTE["text_dim"],
                 font=(system_font_family(), 11)
                 ).pack(anchor="w", pady=(0, 20))
 
         options = [
-            ("class",     "A2", "クラスごと（A2横向き、デフォルト）",
-             "1クラス1枚のA2ポスター。これまで通りの出力"),
-            ("grade-a2",  "A2", "学年まとめてA2縦長",
-             "1学年の全クラスを縦長A2に集約。小規模学年向け"),
-            ("grade-a1",  "A1", "学年まとめてA1縦長",
-             "1学年の全クラスを大きなA1縦長に集約。大規模・教室掲示向け"),
+            ("class",     "A2", "クラスごと（A2縦、デフォルト）",
+             "1クラス1枚のA2ポスター（420×594mm 縦置き）"),
+            ("grade-a2",  "A2", "学年まとめて A2幅ロール紙",
+             "幅594mm（A2の長辺）のロール紙に、各クラスをA2個別と同じレイアウトで縦に連結"),
+            ("grade-a1",  "A1", "学年まとめて A1幅ロール紙",
+             "幅841mm（A1の長辺）のロール紙に縦に連結。より大きく掲示できる"),
         ]
         for mode, paper, title, desc in options:
             row = tk.Frame(c, bg=PALETTE["panel"],
@@ -1634,9 +1661,9 @@ class PosterWizard:
                 ).pack(anchor="w", pady=(0, 20))
 
         mode_label = {
-            "class": "クラスごと",
-            "grade-a2": "学年まとめてA2縦長",
-            "grade-a1": "学年まとめてA1縦長",
+            "class": "クラスごと（A2縦）",
+            "grade-a2": "学年ロール紙（A2幅594mm）",
+            "grade-a1": "学年ロール紙（A1幅841mm）",
         }[self.v_mode.get()]
 
         items = [
