@@ -153,18 +153,23 @@ def render_clipping_preview(pil_img, top_pct, left_pct, zoom, max_w=420, max_h=5
     rd = ImageDraw.Draw(result)
     GOLD = (245, 175, 60)
     rd.rectangle([bx1, by1, bx2-1, by2-1], outline=GOLD, width=3)
-    L = 14
+    # 角ハンドル（クリック可能領域として大きめに描画）
+    H = 16
     for cx, cy in [(bx1, by1), (bx2-1, by1), (bx1, by2-1), (bx2-1, by2-1)]:
-        rd.line([(cx-L if cx>bx1 else cx, cy), (cx+L if cx<bx2-1 else cx, cy)],
-                fill=GOLD, width=4)
-        rd.line([(cx, cy-L if cy>by1 else cy), (cx, cy+L if cy<by2-1 else cy)],
-                fill=GOLD, width=4)
+        # 白い丸＋金色の縁取り（つかみやすい見た目）
+        rd.ellipse([cx-H//2, cy-H//2, cx+H//2, cy+H//2],
+                   fill=(255,255,255), outline=GOLD, width=3)
     info = f"crop: {x2-x1}×{y2-y1} px"
     f = get_pil_font(13)
     bb = rd.textbbox((0,0), info, font=f)
     rd.rectangle([6, 6, bb[2]+18, bb[3]+14], fill=(0,0,0,180))
     rd.text((12, 10), info, font=f, fill=(255,255,255))
-    return result, scale, (bx1, by1, bx2, by2)
+    # コーナー位置も返す
+    corners = {
+        "tl": (bx1, by1), "tr": (bx2-1, by1),
+        "bl": (bx1, by2-1), "br": (bx2-1, by2-1)
+    }
+    return result, scale, (bx1, by1, bx2, by2), corners
 
 # ── ポスターセル ──
 C_CARD    = (0xF7, 0xF9, 0xFC)
@@ -658,7 +663,7 @@ class CropAdjusterApp:
         tk.Label(inner, text="クロップ範囲（金色の枠の中だけがポスターに使われます）",
                  bg=PANEL, fg=PALETTE["accent_dk"], font=self._font(11, True)
                 ).pack(pady=(0,8))
-        tk.Label(inner, text="✋ 枠をドラッグして移動できます",
+        tk.Label(inner, text="✋ 枠の中=移動  ●角=ズーム",
                  bg=PANEL, fg=DIM, font=self._font(10)
                 ).pack(pady=(0,6))
         self.prev_label = tk.Label(inner, bg=PALETTE["panel_alt"],
@@ -668,6 +673,7 @@ class CropAdjusterApp:
         self.prev_label.bind("<Button-1>", self._on_drag_start)
         self.prev_label.bind("<B1-Motion>", self._on_drag_motion)
         self.prev_label.bind("<ButtonRelease-1>", self._on_drag_end)
+        self.prev_label.bind("<Motion>", self._on_mouse_move)
 
         # スライダー
         sl_panel = tk.Frame(center, bg=PANEL, padx=20, pady=14,
@@ -947,13 +953,22 @@ class CropAdjusterApp:
             self.v_zoom.set(max(1.0, min(5.0, round(self.v_zoom.get()+delta, 2))))
         self._update_preview()
 
-    # ── ドラッグ ──
+    # ── ドラッグ（4隅でズーム、それ以外で移動）──
     def _on_drag_start(self, event):
         if self.current_img is None: return
+        # コーナーハンドル判定
+        self._drag_mode = "move"  # "move" or "zoom"
+        if hasattr(self, "_corners"):
+            for name, (cx, cy) in self._corners.items():
+                if abs(event.x - cx) < 18 and abs(event.y - cy) < 18:
+                    self._drag_mode = "zoom"
+                    self._drag_corner = name
+                    break
         self._dragging = True
         self._drag_start = (event.x, event.y)
         self._drag_start_left = self.v_left.get()
         self._drag_start_top = self.v_top.get()
+        self._drag_start_zoom = self.v_zoom.get()
         self.root.focus_set()
 
     def _on_drag_motion(self, event):
@@ -961,15 +976,52 @@ class CropAdjusterApp:
         if self._drag_start is None: return
         dx = event.x - self._drag_start[0]
         dy = event.y - self._drag_start[1]
-        delta_left = (dx / self.PREVIEW_W) * 100
-        delta_top = (dy / self.PREVIEW_H) * 100
-        self.v_left.set(max(-50, min(50, self._drag_start_left + delta_left)))
-        self.v_top.set(max(0, min(100, self._drag_start_top + delta_top)))
+
+        if self._drag_mode == "zoom":
+            # コーナードラッグ：対角線方向の動きでズーム
+            # 中心に近づく → ズームアップ、離れる → ズームダウン
+            corner = self._drag_corner
+            # 各コーナーで「内側」方向を定義
+            if corner == "tl":   # 左上：右下方向にドラッグでズームアップ
+                progress = (dx + dy) / 2
+            elif corner == "tr": # 右上：左下方向にドラッグでズームアップ
+                progress = (-dx + dy) / 2
+            elif corner == "bl": # 左下：右上方向にドラッグでズームアップ
+                progress = (dx - dy) / 2
+            else:                # br：左上方向にドラッグでズームアップ
+                progress = (-dx - dy) / 2
+            # 100px の動きでズーム1.0倍変化
+            zoom_delta = progress / 100
+            new_zoom = max(1.0, min(5.0, self._drag_start_zoom + zoom_delta))
+            self.v_zoom.set(round(new_zoom, 2))
+        else:
+            # 通常ドラッグ：枠を移動
+            delta_left = (dx / self.PREVIEW_W) * 100
+            delta_top = (dy / self.PREVIEW_H) * 100
+            self.v_left.set(max(-50, min(50, self._drag_start_left + delta_left)))
+            self.v_top.set(max(0, min(100, self._drag_start_top + delta_top)))
+
         self._update_preview()
 
     def _on_drag_end(self, event):
         self._dragging = False
         self._drag_start = None
+        self._drag_mode = "move"
+
+    # マウス位置に応じてカーソルを変える
+    def _on_mouse_move(self, event):
+        if self.current_img is None or not hasattr(self, "_corners"):
+            self.prev_label.configure(cursor="fleur")
+            return
+        for name, (cx, cy) in self._corners.items():
+            if abs(event.x - cx) < 18 and abs(event.y - cy) < 18:
+                # コーナー位置に応じて拡縮カーソル
+                if name in ("tl", "br"):
+                    self.prev_label.configure(cursor="size_nw_se" if not IS_MAC else "crosshair")
+                else:
+                    self.prev_label.configure(cursor="size_ne_sw" if not IS_MAC else "crosshair")
+                return
+        self.prev_label.configure(cursor="fleur")
 
     # ── クラス一覧 ──
     def _refresh_class_list(self):
@@ -1055,7 +1107,7 @@ class CropAdjusterApp:
         top  = self.v_top.get()
         left = self.v_left.get()
         zoom = float(self.v_zoom.get())
-        prev_img, _, _ = render_clipping_preview(
+        prev_img, _, _, self._corners = render_clipping_preview(
             self.current_img, top, left, zoom,
             max_w=self.PREVIEW_W, max_h=self.PREVIEW_H)
         self._prev_tk = ImageTk.PhotoImage(prev_img)
