@@ -319,7 +319,7 @@ def detect_face(pil_img):
                     return sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
     return None
 
-def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0):
+def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0, top_offset=0, left_offset=0):
     """
     学校個人写真向けクロップ。crop_adjuster.py と同じロジック。
     重要: 頭の上を確実に枠内に収める（顔の高さ × 0.5 の余白）
@@ -367,6 +367,11 @@ def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0):
             left_pct = max(-50, min(50, left_pct))
         else:
             top_pct, left_pct, zoom = 0.0, 0.0, 1.0
+            zoom = max(1.0, min(5.0, zoom * zoom_multiplier))
+
+    # 全体オフセット適用
+    top_pct = max(0, min(100, top_pct + top_offset))
+    left_pct = max(-50, min(50, left_pct + left_offset))
 
     # ── 実クロップ範囲計算 ──
     crop_w = base_w / zoom
@@ -415,7 +420,7 @@ def rmask(size, r, top=True, bot=True):
 # ════════════════════════════════════════════
 #  生徒セル描画
 # ════════════════════════════════════════════
-def make_student_cell(img_path, cw, ch, lh, num, name, override=None, zoom_multiplier=1.0):
+def make_student_cell(img_path, cw, ch, lh, num, name, override=None, zoom_multiplier=1.0, top_offset=0, left_offset=0):
     R  = 18
     ph = ch - lh
 
@@ -427,7 +432,7 @@ def make_student_cell(img_path, cw, ch, lh, num, name, override=None, zoom_multi
     if img_path and os.path.exists(img_path):
         try:
             pil   = fix_exif_rotation(Image.open(img_path))
-            photo = smart_crop(pil, cw, ph, override=override, zoom_multiplier=zoom_multiplier)
+            photo = smart_crop(pil, cw, ph, override=override, zoom_multiplier=zoom_multiplier, top_offset=top_offset, left_offset=left_offset)
         except:
             photo = make_placeholder(cw, ph)
     else:
@@ -479,7 +484,7 @@ def make_teacher_cell(cw, ch, lh, name):
 # ════════════════════════════════════════════
 #  ポスター生成（1クラス）
 # ════════════════════════════════════════════
-def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A2', zoom_multiplier=1.0):
+def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A2', zoom_multiplier=1.0, top_offset=0, left_offset=0):
     print(f"\n▶ {grade}年{cls}組  [{Path(folder).name}]")
     nums  = sorted(roster.keys())
     total = len(nums)
@@ -512,7 +517,19 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
     lh = int(LABEL_H*P)
 
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
-    ch = ((ph - mt - hh - mb) - (final_rows-1)*gr) // final_rows
+    # ★ 写真エリアの縦横比をプレビューと一致させる (3:4)
+    # photo_h = cw * 4/3
+    photo_h_target = int(cw * 4 / 3)
+    ch = photo_h_target + lh
+    # 利用可能な総高さに収まるかチェック
+    available_h = (ph - mt - hh - mb) - (final_rows - 1) * gr
+    required_h = final_rows * ch
+    if required_h > available_h:
+        # 全体縮小（cwを縮小）
+        scale = available_h / required_h
+        cw = int(cw * scale * 0.98)
+        photo_h_target = int(cw * 4 / 3)
+        ch = photo_h_target + lh
 
     # ── ページ描画 ──
     page = Image.new("RGB", (pw,ph), C_BG)
@@ -546,7 +563,8 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
             ov = (overrides or {}).get((grade, cls, val))
             ci = make_student_cell(photos.get(val), cw, ch, lh, val,
                                    roster.get(val, f"{val:02d}番"),
-                                   override=ov, zoom_multiplier=zoom_multiplier)
+                                   override=ov, zoom_multiplier=zoom_multiplier,
+                                   top_offset=top_offset, left_offset=left_offset)
         page.paste(ci.convert("RGB"), (x,y), ci)
 
     # フッター
@@ -570,7 +588,7 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
 #  （A2/A1個別と同じレイアウト・セルサイズを保ったまま縦に連結）
 # ════════════════════════════════════════════
 def generate_grade_poster(grade, classes_data, out_dir, roster_master,
-                          paper="A2", overrides=None, zoom_multiplier=1.0):
+                          paper="A2", overrides=None, zoom_multiplier=1.0, top_offset=0, left_offset=0):
     """
     学年単位ポスター（ロール紙縦長出力）。
     paper="A2" → 幅594mm（A2の長辺）のロール
@@ -651,7 +669,8 @@ def generate_grade_poster(grade, classes_data, out_dir, roster_master,
         class_img = _render_single_class_image(
             grade, cls, blk["folder"], blk["roster"], blk["photos"],
             None, overrides, zoom_multiplier,
-            target_w=class_w_px, target_h=class_h_px)
+            target_w=class_w_px, target_h=class_h_px,
+            top_offset=top_offset, left_offset=left_offset)
 
         # 縦位置
         y_pos = idx * (class_h_px + gap_px)
@@ -678,7 +697,7 @@ def generate_grade_poster(grade, classes_data, out_dir, roster_master,
 
 def _render_single_class_image(grade, cls, folder, roster, photos,
                                 teacher, overrides, zoom_multiplier,
-                                target_w, target_h):
+                                target_w, target_h, top_offset=0, left_offset=0):
     """
     1クラス分のポスターをPIL Imageとして返す（PDF化はしない）。
     個別A2ポスター generate_poster と同じレイアウトロジック。
@@ -704,7 +723,19 @@ def _render_single_class_image(grade, cls, folder, roster, photos,
     lh = int(LABEL_H * P)
 
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
-    ch = ((ph - mt - hh - mb) - (final_rows-1)*gr) // final_rows
+    # ★ 写真エリアの縦横比をプレビューと一致させる (3:4)
+    # photo_h = cw * 4/3
+    photo_h_target = int(cw * 4 / 3)
+    ch = photo_h_target + lh
+    # 利用可能な総高さに収まるかチェック
+    available_h = (ph - mt - hh - mb) - (final_rows - 1) * gr
+    required_h = final_rows * ch
+    if required_h > available_h:
+        # 全体縮小（cwを縮小）
+        scale = available_h / required_h
+        cw = int(cw * scale * 0.98)
+        photo_h_target = int(cw * 4 / 3)
+        ch = photo_h_target + lh
 
     # 1クラス分のキャンバス
     page = Image.new("RGB", (pw, ph), C_BG)
@@ -736,7 +767,8 @@ def _render_single_class_image(grade, cls, folder, roster, photos,
             ov = (overrides or {}).get((grade, cls, val))
             ci = make_student_cell(photos.get(val), cw, ch, lh, val,
                                    roster.get(val, f"{val:02d}番"),
-                                   override=ov, zoom_multiplier=zoom_multiplier)
+                                   override=ov, zoom_multiplier=zoom_multiplier,
+                                   top_offset=top_offset, left_offset=left_offset)
         page.paste(ci.convert("RGB"), (x, y), ci)
 
     return page
@@ -768,6 +800,10 @@ def main():
                     help="担任情報CSV（grade,cls,name,photo の4列）")
     ap.add_argument("--zoom-multiplier", type=float, default=1.0,
                     help="全体ズーム倍率（1.0=標準、1.3=30%%アップ、0.8=20%%引き）")
+    ap.add_argument("--top-offset", type=float, default=0,
+                    help="全体の上下オフセット（%%、+で下に、-で上に）")
+    ap.add_argument("--left-offset", type=float, default=0,
+                    help="全体の左右オフセット（%%、+で右に、-で左に）")
     args = ap.parse_args()
 
     # 名簿特定
@@ -819,7 +855,7 @@ def main():
         for g in grades_to_process:
             generate_grade_poster(g, by_grade[g], args.out, master,
                                   paper=paper, overrides=overrides,
-                                  zoom_multiplier=args.zoom_multiplier)
+                                  zoom_multiplier=args.zoom_multiplier, top_offset=args.top_offset, left_offset=args.left_offset)
     elif args.grade and args.cls:
         # 単一クラス
         folder = find_class_folder(args.base, args.grade, args.cls)
@@ -830,7 +866,7 @@ def main():
         generate_poster(args.grade, args.cls, folder, args.out,
                         roster, teacher, overrides=overrides,
                         cols=args.cols, rows=args.rows, paper=paper,
-                        zoom_multiplier=args.zoom_multiplier)
+                        zoom_multiplier=args.zoom_multiplier, top_offset=args.top_offset, left_offset=args.left_offset)
     else:
         # 全クラス（クラス単位）
         classes = find_all_classes(args.base)
@@ -842,7 +878,7 @@ def main():
             teacher = teachers_data.get((g, c), {}).get('name') or args.teacher
             generate_poster(g, c, folder, args.out, roster, teacher,
                           overrides=overrides, cols=args.cols, rows=args.rows,
-                          paper=paper, zoom_multiplier=args.zoom_multiplier)
+                          paper=paper, zoom_multiplier=args.zoom_multiplier, top_offset=args.top_offset, left_offset=args.left_offset)
 
     print("\n完了 ✅")
 
