@@ -588,10 +588,11 @@ def generate_grade_poster(grade, classes_data, out_dir, roster_master,
     if not classes_data:
         print("  ⚠ クラスデータなし"); return
 
-    # ── 1クラス分のサイズ（A2個別と同じ）──
-    # A2 = 420mm × 594mm （420が短辺＝幅、594が長辺＝高さ）
-    class_w_mm = 420
-    class_h_mm = 594
+    # ── 1クラス分のサイズ ──
+    # 縦横比はA2個別（420:594）を維持しつつ、ロール紙幅ギリギリまで拡大
+    SIDE_MARGIN_MM = 10  # 片側余白
+    class_w_mm = roll_width_mm - SIDE_MARGIN_MM * 2
+    class_h_mm = class_w_mm * (594 / 420)  # A2比率を維持
 
     DPI = 150; P = DPI / 72.0
 
