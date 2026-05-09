@@ -1495,7 +1495,11 @@ class ClassBatchEditor:
         self.image_cache = {}
         self.face_cache = {}
 
-        # 一括調整値
+        # 作業中の値（連続編集対応）。初期は original または face_cache の値。
+        # _load_and_refresh で正式に初期化される
+        self.working = {}
+
+        # 一括調整値（現在のスライダー差分）
         self.v_zoom_mult = tk.DoubleVar(value=1.0)
         self.v_top_add = tk.DoubleVar(value=0)
         self.v_left_add = tk.DoubleVar(value=0)
@@ -1589,7 +1593,7 @@ class ClassBatchEditor:
         # リセットボタン
         rr = tk.Frame(slid, bg=PALETTE["panel"])
         rr.pack(side="left", padx=16)
-        MacButton(rr, "↺ ゼロに戻す", self._reset_sliders,
+        MacButton(rr, "↺ 未確定をゼロに", self._reset_sliders,
                  bg=PALETTE["neutral"], fg=PALETTE["text"],
                  font=(system_font_family(), 10), padx=12, pady=6
                 ).pack(pady=(20, 0))
@@ -1633,7 +1637,7 @@ class ClassBatchEditor:
         btnf.pack(fill="x", padx=14, pady=(0, 12))
 
         tk.Label(btnf, text="※ ⌘+クリック=個別追加 / Shift+クリック=範囲 / ⌘A=全選択 / Esc=解除\n"
-                     "※ ↑↓←→=顔の移動方向 / Shift+↑↓=ズーム",
+                     "※ ↑↓←→=顔の移動 / Shift+↑↓=ズーム / 選択切替で値が確定",
                 bg=PALETTE["bg"], fg=PALETTE["text_dim"],
                 font=(system_font_family(), 9), justify="left"
                 ).pack(side="left")
@@ -1676,19 +1680,24 @@ class ClassBatchEditor:
         w.bind("<Escape>", lambda e: self._clear_selection())
 
     def _select_all(self):
+        self._commit_sliders_to_working()
         self.selected = set(self.nums)
         self._update_selection_visual()
         self._update_apply_label()
+        self._refresh_thumbnails()
         return "break"
 
     def _clear_selection(self):
+        self._commit_sliders_to_working()
         self.selected.clear()
         self._last_clicked = None
         self._update_selection_visual()
         self._update_apply_label()
+        self._refresh_thumbnails()
         return "break"
 
     def _reset_sliders(self):
+        """現在の未確定スライダー値だけ捨てる（作業値は保持）"""
         self.v_zoom_mult.set(1.0)
         self.v_top_add.set(0)
         self.v_left_add.set(0)
@@ -1710,24 +1719,32 @@ class ClassBatchEditor:
                 self.status_label.config(text=f"読み込み中... {i+1}/{len(self.nums)}")
                 self.win.update_idletasks()
 
+        # 作業中の値を初期化
+        for n in self.nums:
+            ov = self.original.get(n)
+            if ov:
+                self.working[n] = dict(ov)
+            elif n in self.face_cache:
+                t, l, z = self.face_cache[n]
+                self.working[n] = {"top_pct": t, "left_pct": l, "zoom": z}
+            else:
+                self.working[n] = {"top_pct": 0, "left_pct": 0, "zoom": 1.0}
+
         self.status_label.config(text=f"{len(self.nums)}人")
         self._refresh_thumbnails()
 
     def _calc_values(self, n, force_apply=False):
         """生徒nの最終クロップ値を計算
-        force_apply=True または対象生徒(選択中 or 選択0=全員)なら調整値反映、
-        それ以外は元の値そのまま"""
-        ov = self.original.get(n)
-        if ov:
-            top = ov["top_pct"]
-            left = ov["left_pct"]
-            zoom = ov["zoom"]
-        elif n in self.face_cache:
-            top, left, zoom = self.face_cache[n]
-        else:
-            top, left, zoom = 0, 0, 1.0
+        working値（永続）+ 現在のスライダー値（一時、選択中のみ）
+        """
+        if n not in self.working:
+            return 0, 0, 1.0
+        base = self.working[n]
+        top = base["top_pct"]
+        left = base["left_pct"]
+        zoom = base["zoom"]
 
-        # 対象判定
+        # 選択中（or 何も選択されていなければ全員）にスライダー値を一時的に加算
         is_target = force_apply or (not self.selected) or (n in self.selected)
         if is_target:
             zm = self.v_zoom_mult.get()
@@ -1737,6 +1754,26 @@ class ClassBatchEditor:
             left = max(-50, min(50, left + la))
             zoom = max(1.0, min(5.0, zoom * zm))
         return top, left, zoom
+
+    def _commit_sliders_to_working(self):
+        """現在のスライダー値を、選択中の生徒の作業値に取り込む。スライダーは0/1.0にリセット"""
+        zm = self.v_zoom_mult.get()
+        ta = self.v_top_add.get()
+        la = self.v_left_add.get()
+        # 変化なしなら何もしない
+        if abs(zm - 1.0) < 0.001 and abs(ta) < 0.01 and abs(la) < 0.01:
+            return
+        target = self.selected if self.selected else set(self.nums)
+        for n in target:
+            if n not in self.working: continue
+            w = self.working[n]
+            w["top_pct"]  = max(0, min(100, w["top_pct"] + ta))
+            w["left_pct"] = max(-50, min(50, w["left_pct"] + la))
+            w["zoom"]     = max(1.0, min(5.0, w["zoom"] * zm))
+        # スライダーリセット
+        self.v_zoom_mult.set(1.0)
+        self.v_top_add.set(0)
+        self.v_left_add.set(0)
 
     def _refresh_thumbnails(self):
         # 既存サムネ削除
@@ -1792,7 +1829,10 @@ class ClassBatchEditor:
         self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
 
     def _on_thumb_click(self, event, num):
-        """サムネクリック: 選択処理"""
+        """サムネクリック: 選択処理。現在の値を作業値にコミットしてから選択切替"""
+        # まず現在のスライダー値を選択中の生徒に確定
+        self._commit_sliders_to_working()
+
         # macOS: Cmd = state & 0x0010 (Mod1) もしくは 0x00100000
         # Shift = state & 0x0001
         is_shift = bool(event.state & 0x0001)
@@ -1845,42 +1885,70 @@ class ClassBatchEditor:
                 self._apply_btn.set_text("✓ 全員に適用")
 
     def _apply(self):
-        """個別overrideを書き換える（選択中があればそれのみ、なければ全員）"""
+        """working から個別overrideに書き出す。元と差分のあるものだけ保存"""
+        # 最後のスライダー値もコミット
+        self._commit_sliders_to_working()
+
         # バックアップ
         if os.path.exists(self.app.override_path):
             bak = self.app.override_path + ".bak"
             try: shutil.copy2(self.app.override_path, bak)
             except: pass
 
-        # 対象決定
+        # 対象決定: 選択中があればそれ、なければ「変更があった全員」
         if self.selected:
             target_nums = sorted(self.selected)
-            scope = f"選択{len(target_nums)}人"
         else:
-            target_nums = self.nums
-            scope = f"全員{len(target_nums)}人"
+            target_nums = []
+            for n in self.nums:
+                if n not in self.working: continue
+                w = self.working[n]
+                orig = self.original.get(n)
+                if orig:
+                    diff = (abs(w["top_pct"] - orig["top_pct"]) > 0.05 or
+                            abs(w["left_pct"] - orig["left_pct"]) > 0.05 or
+                            abs(w["zoom"] - orig["zoom"]) > 0.005)
+                else:
+                    # 未調整 → face_cacheの値と比較
+                    if n in self.face_cache:
+                        t, l, z = self.face_cache[n]
+                        diff = (abs(w["top_pct"] - t) > 0.05 or
+                                abs(w["left_pct"] - l) > 0.05 or
+                                abs(w["zoom"] - z) > 0.005)
+                    else:
+                        diff = True
+                if diff:
+                    target_nums.append(n)
+
+        if not target_nums:
+            messagebox.showinfo("情報", "変更されたデータがありません")
+            return
 
         count = 0
         for n in target_nums:
-            top, left, zoom = self._calc_values(n, force_apply=True)
+            if n not in self.working: continue
+            w = self.working[n]
             self.app.overrides[(self.grade, self.cls, n)] = {
-                "top_pct": top, "left_pct": left, "zoom": zoom,
+                "top_pct": w["top_pct"],
+                "left_pct": w["left_pct"],
+                "zoom": w["zoom"],
             }
             count += 1
 
         save_overrides(self.app.override_path, self.app.overrides)
         self.app.saved_var.set(f"調整済み {len(self.app.overrides)}件")
         self.app._refresh_class_list()
-        self.app.status_var.set(f"  ✓ {self.grade}年{self.cls}組 {scope}を一括更新")
+        scope = f"選択{count}人" if self.selected else f"変更のあった{count}人"
+        self.app.status_var.set(f"  ✓ {self.grade}年{self.cls}組 {scope}を保存")
 
-        # ★ メインアプリの現在生徒もリロード
+        # メインアプリの現在生徒もリロード
         if self.app.current_key:
             g, c, n = self.app.current_key
             if g == self.grade and c == self.cls and n in self.app.photos:
                 self.app._load(g, c, n)
 
         messagebox.showinfo("適用完了",
-            f"{scope}のクロップ値を更新しました\n"
+            f"{scope}のクロップ値を保存しました\n"
             f"バックアップ: crop_overrides.csv.bak")
         self.win.destroy()
 
