@@ -1561,7 +1561,7 @@ class ClassBatchEditor:
         # 上下オフセット
         tr = tk.Frame(slid, bg=PALETTE["panel"])
         tr.pack(side="left", padx=16)
-        tk.Label(tr, text="上下 (-=上)", bg=PALETTE["panel"],
+        tk.Label(tr, text="上下 (+=顔を上に)", bg=PALETTE["panel"],
                 fg=PALETTE["text"], font=(system_font_family(), 10, "bold")
                 ).pack(anchor="w")
         tk.Scale(tr, from_=-20, to=20, resolution=1,
@@ -1575,7 +1575,7 @@ class ClassBatchEditor:
         # 左右オフセット
         lr = tk.Frame(slid, bg=PALETTE["panel"])
         lr.pack(side="left", padx=16)
-        tk.Label(lr, text="左右 (-=左)", bg=PALETTE["panel"],
+        tk.Label(lr, text="左右 (+=顔を左に)", bg=PALETTE["panel"],
                 fg=PALETTE["text"], font=(system_font_family(), 10, "bold")
                 ).pack(anchor="w")
         tk.Scale(lr, from_=-20, to=20, resolution=1,
@@ -1633,7 +1633,7 @@ class ClassBatchEditor:
         btnf.pack(fill="x", padx=14, pady=(0, 12))
 
         tk.Label(btnf, text="※ ⌘+クリック=個別追加 / Shift+クリック=範囲 / ⌘A=全選択 / Esc=解除\n"
-                     "※ ↑↓←→=位置 / Shift+↑↓=ズーム",
+                     "※ ↑↓←→=顔の移動方向 / Shift+↑↓=ズーム",
                 bg=PALETTE["bg"], fg=PALETTE["text_dim"],
                 font=(system_font_family(), 9), justify="left"
                 ).pack(side="left")
@@ -1660,10 +1660,12 @@ class ClassBatchEditor:
             new = max(lo, min(hi, var.get() + delta))
             var.set(new)
             self._schedule_refresh()
-        w.bind("<Up>",         lambda e: step(self.v_top_add, -1, -20, 20))
-        w.bind("<Down>",       lambda e: step(self.v_top_add, +1, -20, 20))
-        w.bind("<Left>",       lambda e: step(self.v_left_add, -1, -20, 20))
-        w.bind("<Right>",      lambda e: step(self.v_left_add, +1, -20, 20))
+        # 一括調整画面では「顔の動かしたい方向」と矢印を一致させる
+        # ↑を押す → 顔を上に動かしたい → クロップ枠を下へ → top_add += 1
+        w.bind("<Up>",         lambda e: step(self.v_top_add, +1, -20, 20))
+        w.bind("<Down>",       lambda e: step(self.v_top_add, -1, -20, 20))
+        w.bind("<Left>",       lambda e: step(self.v_left_add, +1, -20, 20))
+        w.bind("<Right>",      lambda e: step(self.v_left_add, -1, -20, 20))
         w.bind("<Shift-Up>",   lambda e: step(self.v_zoom_mult, +0.05, 0.5, 2.0))
         w.bind("<Shift-Down>", lambda e: step(self.v_zoom_mult, -0.05, 0.5, 2.0))
         # Cmd+A で全選択
@@ -1711,11 +1713,10 @@ class ClassBatchEditor:
         self.status_label.config(text=f"{len(self.nums)}人")
         self._refresh_thumbnails()
 
-    def _calc_values(self, n):
-        """生徒nの最終クロップ値を計算（一括調整値を加味）"""
-        zm = self.v_zoom_mult.get()
-        ta = self.v_top_add.get()
-        la = self.v_left_add.get()
+    def _calc_values(self, n, force_apply=False):
+        """生徒nの最終クロップ値を計算
+        force_apply=True または対象生徒(選択中 or 選択0=全員)なら調整値反映、
+        それ以外は元の値そのまま"""
         ov = self.original.get(n)
         if ov:
             top = ov["top_pct"]
@@ -1725,9 +1726,16 @@ class ClassBatchEditor:
             top, left, zoom = self.face_cache[n]
         else:
             top, left, zoom = 0, 0, 1.0
-        top = max(0, min(100, top + ta))
-        left = max(-50, min(50, left + la))
-        zoom = max(1.0, min(5.0, zoom * zm))
+
+        # 対象判定
+        is_target = force_apply or (not self.selected) or (n in self.selected)
+        if is_target:
+            zm = self.v_zoom_mult.get()
+            ta = self.v_top_add.get()
+            la = self.v_left_add.get()
+            top = max(0, min(100, top + ta))
+            left = max(-50, min(50, left + la))
+            zoom = max(1.0, min(5.0, zoom * zm))
         return top, left, zoom
 
     def _refresh_thumbnails(self):
@@ -1854,7 +1862,7 @@ class ClassBatchEditor:
 
         count = 0
         for n in target_nums:
-            top, left, zoom = self._calc_values(n)
+            top, left, zoom = self._calc_values(n, force_apply=True)
             self.app.overrides[(self.grade, self.cls, n)] = {
                 "top_pct": top, "left_pct": left, "zoom": zoom,
             }
