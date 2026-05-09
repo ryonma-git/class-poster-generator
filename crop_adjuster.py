@@ -12,7 +12,7 @@
 - Appleライクデザイン（SF Pro Display, フラット, 余白広め）
 """
 
-import os, glob, re, csv, argparse, subprocess, threading, sys, platform
+import os, glob, re, csv, argparse, subprocess, threading, sys, platform, shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -132,8 +132,8 @@ def auto_initial_crop_params(pil_img):
         base_h = w / CELL_ASPECT
     else:
         base_h = h
-    head_margin = fh * 0.5
-    desired_crop_h = fh * 2.8
+    head_margin = fh * 0.4  # 頭上の余白（顔の40%）
+    desired_crop_h = fh * 2.2  # 顔の高さの2.2倍（アップ寄り）
     zoom = base_h / desired_crop_h
     zoom = max(1.0, min(5.0, zoom))
     crop_h_actual = base_h / zoom
@@ -771,53 +771,11 @@ class CropAdjusterApp:
                                      width=self.POSTER_W, height=cell_h)
         self.poster_label.pack(padx=14)
 
-        # ─ 全体ズーム倍率 ─
-        tk.Label(right, text="GLOBAL ZOOM", bg=PANEL, fg=DIM,
-                 font=self._font(10, True), anchor="w"
-                ).pack(fill="x", padx=14, pady=(20,4))
-        tk.Label(right, text="全クラス共通の追加ズーム",
-                 bg=PANEL, fg=PALETTE["text_label"], font=self._font(10), anchor="w"
-                ).pack(fill="x", padx=14)
-        self.v_global_zoom = tk.DoubleVar(value=1.0)
-        zoom_row = tk.Frame(right, bg=PANEL)
-        zoom_row.pack(fill="x", padx=14, pady=(4,2))
-        tk.Scale(zoom_row, from_=0.7, to=2.0, resolution=0.05,
-                 orient="horizontal", variable=self.v_global_zoom,
-                 length=240, bg=PANEL, fg=TEXT,
-                 troughcolor=PALETTE["panel_alt"],
-                 highlightthickness=0, relief="flat",
-                 activebackground=PALETTE["accent"],
-                 showvalue=True, font=self._font(10, True),
-                 takefocus=0).pack()
-        tk.Label(right, text="(0.7=引き  1.0=標準  2.0=2倍アップ)",
-                 bg=PANEL, fg=DIM, font=self._font(9), anchor="w"
-                ).pack(fill="x", padx=14, pady=(0,4))
-
-        # 全体オフセット
-        tk.Label(right, text="一括オフセット (上下/左右)",
-                 bg=PANEL, fg=PALETTE["text_label"], font=self._font(10, True), anchor="w"
-                ).pack(fill="x", padx=14, pady=(8,0))
-        tk.Label(right, text="↓「現クラス再生成」で現クラスのみ /\n　「全クラス再生成」で全体に適用",
-                 bg=PANEL, fg=DIM, font=self._font(9), anchor="w", justify="left"
-                ).pack(fill="x", padx=14, pady=(0,2))
-        self.v_global_top = tk.DoubleVar(value=0)
-        self.v_global_left = tk.DoubleVar(value=0)
-        ofs_row = tk.Frame(right, bg=PANEL)
-        ofs_row.pack(fill="x", padx=14)
-        tk.Scale(ofs_row, from_=-20, to=20, resolution=1,
-                 orient="horizontal", variable=self.v_global_top,
-                 length=240, bg=PANEL, fg=TEXT, label="上下 (-=上)",
-                 troughcolor=PALETTE["panel_alt"], highlightthickness=0,
-                 relief="flat", activebackground=PALETTE["accent"],
-                 showvalue=True, font=self._font(9, True),
-                 takefocus=0).pack()
-        tk.Scale(ofs_row, from_=-20, to=20, resolution=1,
-                 orient="horizontal", variable=self.v_global_left,
-                 length=240, bg=PANEL, fg=TEXT, label="左右 (-=左)",
-                 troughcolor=PALETTE["panel_alt"], highlightthickness=0,
-                 relief="flat", activebackground=PALETTE["accent"],
-                 showvalue=True, font=self._font(9, True),
-                 takefocus=0).pack(pady=(2,8))
+        # ─ 一括編集系UI ─
+        # 注: 旧「GLOBAL ZOOM / 一括オフセット」スライダーは
+        #   「個別調整値の上に重ねる」方式で混乱を招くため、コメントアウト中。
+        #   将来は「クラス全員プレビュー上で個別データを直接編集できる画面」を実装予定。
+        # ----------------------------------------------------------
 
         tk.Label(right, text="ACTIONS", bg=PANEL, fg=DIM,
                  font=self._font(10, True), anchor="w"
@@ -846,6 +804,11 @@ class CropAdjusterApp:
                  bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
                  font=self._font(11, True), padx=10, pady=10
                 ).pack(fill="x", padx=14, pady=(12,4))
+
+        MacButton(right, "✏️ クラス一括調整", self.show_batch_editor,
+                 bg=PALETTE["primary"], fg="#ffffff",
+                 font=self._font(11, True), padx=10, pady=10
+                ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "⚙ 出力ウィザード", self.show_wizard,
                  bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
@@ -1423,6 +1386,14 @@ class CropAdjusterApp:
         self._run_poster(["--grade", str(g), "--cls", str(c)],
                          f"  ⏳ {g}年{c}組のPDF再生成中...")
 
+    def show_batch_editor(self):
+        """クラス一括調整画面を開く"""
+        if not self.current_key:
+            messagebox.showinfo("情報", "先にクラスを選択してください")
+            return
+        g, c, _ = self.current_key
+        ClassBatchEditor(self, g, c)
+
     def show_wizard(self):
         """出力ウィザードを開く"""
         PosterWizard(self)
@@ -1434,20 +1405,10 @@ class CropAdjusterApp:
 
     def _run_poster(self, extra_args, msg):
         self.status_var.set(msg)
-        # 全体ズーム倍率
-        if hasattr(self, 'v_global_zoom'):
-            zm = float(self.v_global_zoom.get())
-            if abs(zm - 1.0) > 0.01:
-                extra_args = list(extra_args) + ["--zoom-multiplier", f"{zm:.2f}"]
-        # 全体オフセット
-        if hasattr(self, 'v_global_top'):
-            tof = float(self.v_global_top.get())
-            if abs(tof) > 0.01:
-                extra_args = list(extra_args) + ["--top-offset", f"{tof:.1f}"]
-        if hasattr(self, 'v_global_left'):
-            lof = float(self.v_global_left.get())
-            if abs(lof) > 0.01:
-                extra_args = list(extra_args) + ["--left-offset", f"{lof:.1f}"]
+        # 旧「GLOBAL ZOOM / 一括オフセット」の渡し処理はコメントアウト
+        # if hasattr(self, 'v_global_zoom'): ...
+        # if hasattr(self, 'v_global_top'): ...
+        # if hasattr(self, 'v_global_left'): ...
 
         candidates = [
             os.path.join(self.base, "make_poster.py"),
@@ -1496,6 +1457,297 @@ class CropAdjusterApp:
                 self.root.after(0, lambda: dlg.finish(f"例外: {err_str}", error=True))
         threading.Thread(target=worker, daemon=True).start()
 
+
+
+
+# ════════════════════════════════════════════════════════
+#  クラス一括調整画面
+# ════════════════════════════════════════════════════════
+class ClassBatchEditor:
+    """クラス全員のサムネを見ながら、一括でクロップ値を調整する"""
+
+    def __init__(self, parent_app, grade, cls):
+        self.app = parent_app
+        self.grade = grade
+        self.cls = cls
+        self.roster = self.app.roster_data.get((grade, cls), {})
+        folder = find_class_folder(self.app.base, grade, cls)
+        self.photos = collect_photos(folder, grade, cls) if folder else {}
+        self.nums = sorted([n for n in self.photos.keys()])
+
+        # 元の調整値スナップショット（戻すため）
+        self.original = {}
+        for n in self.nums:
+            ov = self.app.overrides.get((grade, cls, n))
+            if ov:
+                self.original[n] = dict(ov)
+
+        # キャッシュ
+        self.image_cache = {}
+        self.face_cache = {}
+
+        # 一括調整値
+        self.v_zoom_mult = tk.DoubleVar(value=1.0)
+        self.v_top_add = tk.DoubleVar(value=0)
+        self.v_left_add = tk.DoubleVar(value=0)
+
+        self._thumb_widgets = {}  # num -> Label
+
+        self._build_ui()
+        self.win.after(100, self._load_and_refresh)
+
+    def _build_ui(self):
+        win = tk.Toplevel(self.app.root)
+        self.win = win
+        win.title(f"{self.grade}年{self.cls}組 一括調整")
+        win.configure(bg=PALETTE["bg"])
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        ww = min(960, int(sw * 0.85))
+        wh = min(820, int(sh * 0.85))
+        win.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
+        win.transient(self.app.root)
+
+        # ヘッダー
+        h = tk.Frame(win, bg=PALETTE["primary"], height=46)
+        h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text=f"  {self.grade}年 {self.cls}組  クラス一括調整",
+                bg=PALETTE["primary"], fg="#ffffff",
+                font=(system_font_family(), 14, "bold")
+                ).pack(side="left", padx=20, pady=12)
+        self.status_label = tk.Label(h, text="", bg=PALETTE["primary"],
+                                    fg="#cce4ff", font=(system_font_family(), 11))
+        self.status_label.pack(side="right", padx=20, pady=12)
+
+        # 一括スライダーパネル
+        ctrl = tk.Frame(win, bg=PALETTE["panel"],
+                       highlightthickness=1, highlightbackground=PALETTE["border"])
+        ctrl.pack(fill="x", padx=14, pady=(12, 8))
+
+        tk.Label(ctrl, text="一括調整 (現在のクロップ値に対して)",
+                bg=PALETTE["panel"], fg=PALETTE["text_label"],
+                font=(system_font_family(), 11, "bold")
+                ).pack(anchor="w", padx=14, pady=(10, 4))
+
+        slid = tk.Frame(ctrl, bg=PALETTE["panel"])
+        slid.pack(fill="x", padx=14, pady=(0, 10))
+
+        # ズーム倍率
+        zr = tk.Frame(slid, bg=PALETTE["panel"])
+        zr.pack(side="left", padx=(0, 16))
+        tk.Label(zr, text="ズーム倍率", bg=PALETTE["panel"],
+                fg=PALETTE["text"], font=(system_font_family(), 10, "bold")
+                ).pack(anchor="w")
+        tk.Scale(zr, from_=0.5, to=2.0, resolution=0.05,
+                orient="horizontal", variable=self.v_zoom_mult,
+                length=200, bg=PALETTE["panel"],
+                troughcolor=PALETTE["panel_alt"], highlightthickness=0,
+                showvalue=True, font=(system_font_family(), 9),
+                command=lambda v: self._schedule_refresh()
+                ).pack()
+
+        # 上下オフセット
+        tr = tk.Frame(slid, bg=PALETTE["panel"])
+        tr.pack(side="left", padx=16)
+        tk.Label(tr, text="上下 (-=上)", bg=PALETTE["panel"],
+                fg=PALETTE["text"], font=(system_font_family(), 10, "bold")
+                ).pack(anchor="w")
+        tk.Scale(tr, from_=-20, to=20, resolution=1,
+                orient="horizontal", variable=self.v_top_add,
+                length=200, bg=PALETTE["panel"],
+                troughcolor=PALETTE["panel_alt"], highlightthickness=0,
+                showvalue=True, font=(system_font_family(), 9),
+                command=lambda v: self._schedule_refresh()
+                ).pack()
+
+        # 左右オフセット
+        lr = tk.Frame(slid, bg=PALETTE["panel"])
+        lr.pack(side="left", padx=16)
+        tk.Label(lr, text="左右 (-=左)", bg=PALETTE["panel"],
+                fg=PALETTE["text"], font=(system_font_family(), 10, "bold")
+                ).pack(anchor="w")
+        tk.Scale(lr, from_=-20, to=20, resolution=1,
+                orient="horizontal", variable=self.v_left_add,
+                length=200, bg=PALETTE["panel"],
+                troughcolor=PALETTE["panel_alt"], highlightthickness=0,
+                showvalue=True, font=(system_font_family(), 9),
+                command=lambda v: self._schedule_refresh()
+                ).pack()
+
+        # リセットボタン
+        rr = tk.Frame(slid, bg=PALETTE["panel"])
+        rr.pack(side="left", padx=16)
+        MacButton(rr, "↺ ゼロに戻す", self._reset_sliders,
+                 bg=PALETTE["neutral"], fg=PALETTE["text"],
+                 font=(system_font_family(), 10), padx=12, pady=6
+                ).pack(pady=(20, 0))
+
+        # サムネエリア（スクロール可能）
+        thumb_outer = tk.Frame(win, bg=PALETTE["bg"])
+        thumb_outer.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+
+        self.thumb_canvas = tk.Canvas(thumb_outer, bg=PALETTE["bg"],
+                                     highlightthickness=0)
+        sb = ttk.Scrollbar(thumb_outer, orient="vertical",
+                          command=self.thumb_canvas.yview)
+        self.thumb_canvas.configure(yscrollcommand=sb.set)
+        self.thumb_canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        self.thumb_frame = tk.Frame(self.thumb_canvas, bg=PALETTE["bg"])
+        self._thumb_window = self.thumb_canvas.create_window(
+            (0, 0), window=self.thumb_frame, anchor="nw")
+
+        def _on_frame_config(e):
+            self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
+        self.thumb_frame.bind("<Configure>", _on_frame_config)
+
+        def _on_canvas_config(e):
+            self.thumb_canvas.itemconfig(self._thumb_window, width=e.width)
+        self.thumb_canvas.bind("<Configure>", _on_canvas_config)
+
+        # マウスホイール
+        def _wheel(e):
+            if IS_MAC: step = -1 * int(e.delta)
+            else: step = -1 * int(e.delta / 120)
+            if step == 0: step = -1 if e.delta > 0 else 1
+            self.thumb_canvas.yview_scroll(step, "units")
+            return "break"
+        self.thumb_canvas.bind("<MouseWheel>", _wheel)
+        win.bind("<MouseWheel>", _wheel)
+
+        # 下部ボタン
+        btnf = tk.Frame(win, bg=PALETTE["bg"])
+        btnf.pack(fill="x", padx=14, pady=(0, 12))
+
+        tk.Label(btnf, text="※「全員に適用」で個別調整値が書き換わります（バックアップは自動取得）",
+                bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                font=(system_font_family(), 10)
+                ).pack(side="left")
+
+        MacButton(btnf, "キャンセル", win.destroy,
+                 bg=PALETTE["neutral"], fg=PALETTE["text"],
+                 font=(system_font_family(), 12), padx=16, pady=8
+                ).pack(side="right", padx=4)
+        MacButton(btnf, "✓ 全員に適用", self._apply,
+                 bg=PALETTE["success"], fg="#ffffff",
+                 font=(system_font_family(), 12, "bold"), padx=20, pady=8
+                ).pack(side="right", padx=4)
+
+    def _schedule_refresh(self):
+        if hasattr(self, "_refresh_after_id") and self._refresh_after_id:
+            try: self.win.after_cancel(self._refresh_after_id)
+            except: pass
+        self._refresh_after_id = self.win.after(300, self._refresh_thumbnails)
+
+    def _reset_sliders(self):
+        self.v_zoom_mult.set(1.0)
+        self.v_top_add.set(0)
+        self.v_left_add.set(0)
+        self._refresh_thumbnails()
+
+    def _load_and_refresh(self):
+        """画像と顔検出を全員分読み込み、サムネを表示"""
+        self.status_label.config(text="読み込み中...")
+        self.win.update_idletasks()
+
+        for i, n in enumerate(self.nums):
+            try:
+                img = fix_exif(Image.open(self.photos[n]))
+                self.image_cache[n] = img
+                self.face_cache[n] = auto_initial_crop_params(img)
+            except Exception as e:
+                print(f"画像読み込みエラー {n}: {e}")
+            if i % 5 == 0:
+                self.status_label.config(text=f"読み込み中... {i+1}/{len(self.nums)}")
+                self.win.update_idletasks()
+
+        self.status_label.config(text=f"{len(self.nums)}人")
+        self._refresh_thumbnails()
+
+    def _calc_values(self, n):
+        """生徒nの最終クロップ値を計算（一括調整値を加味）"""
+        zm = self.v_zoom_mult.get()
+        ta = self.v_top_add.get()
+        la = self.v_left_add.get()
+        ov = self.original.get(n)
+        if ov:
+            top = ov["top_pct"]
+            left = ov["left_pct"]
+            zoom = ov["zoom"]
+        elif n in self.face_cache:
+            top, left, zoom = self.face_cache[n]
+        else:
+            top, left, zoom = 0, 0, 1.0
+        top = max(0, min(100, top + ta))
+        left = max(-50, min(50, left + la))
+        zoom = max(1.0, min(5.0, zoom * zm))
+        return top, left, zoom
+
+    def _refresh_thumbnails(self):
+        # 既存サムネ削除
+        for w in self.thumb_frame.winfo_children():
+            w.destroy()
+        self._thumb_widgets.clear()
+
+        # 6列のグリッド表示
+        cols = 6
+        thumb_w = 140
+        thumb_h = int(thumb_w / 1.02)  # CELL_ASPECT
+        for idx, n in enumerate(self.nums):
+            if n not in self.image_cache: continue
+            row, col = divmod(idx, cols)
+            cell = tk.Frame(self.thumb_frame, bg=PALETTE["panel"],
+                          highlightthickness=1, highlightbackground=PALETTE["border"])
+            cell.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
+
+            top, left, zoom = self._calc_values(n)
+            try:
+                cropped = do_crop(self.image_cache[n], top, left, zoom)
+                cropped_thumb = cropped.resize((thumb_w, thumb_h), Image.LANCZOS)
+                photo_tk = ImageTk.PhotoImage(cropped_thumb)
+                lbl = tk.Label(cell, image=photo_tk, bg=PALETTE["panel"])
+                lbl.image = photo_tk  # 参照保持
+                lbl.pack()
+            except Exception as e:
+                tk.Label(cell, text=f"err: {e}", bg=PALETTE["panel"],
+                        fg=PALETTE["danger"], font=(system_font_family(), 9)
+                        ).pack()
+
+            name = self.roster.get(n, f"{n}番")
+            short = name if len(name) <= 8 else name[:7] + "…"
+            tk.Label(cell, text=f"{n:02d} {short}", bg=PALETTE["panel"],
+                    fg=PALETTE["text"], font=(system_font_family(), 9)
+                    ).pack(pady=(0, 4))
+            self._thumb_widgets[n] = cell
+
+        self.thumb_frame.update_idletasks()
+        self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
+
+    def _apply(self):
+        """個別overrideを書き換える"""
+        # バックアップ
+        if os.path.exists(self.app.override_path):
+            bak = self.app.override_path + ".bak"
+            try: shutil.copy2(self.app.override_path, bak)
+            except: pass
+
+        count = 0
+        for n in self.nums:
+            top, left, zoom = self._calc_values(n)
+            self.app.overrides[(self.grade, self.cls, n)] = {
+                "top_pct": top, "left_pct": left, "zoom": zoom,
+            }
+            count += 1
+
+        save_overrides(self.app.override_path, self.app.overrides)
+        self.app.saved_var.set(f"調整済み {len(self.app.overrides)}件")
+        self.app._refresh_class_list()
+        self.app.status_var.set(f"  ✓ {self.grade}年{self.cls}組 {count}人を一括更新")
+        messagebox.showinfo("適用完了",
+            f"{count}人のクロップ値を更新しました\n"
+            f"バックアップ: crop_overrides.csv.bak")
+        self.win.destroy()
 
 
 # ════════════════════════════════════════════════════════

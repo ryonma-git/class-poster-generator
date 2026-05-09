@@ -349,9 +349,9 @@ def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0, 
             face_cx = fx + fw / 2
             face_top = fy
             # 頭の上に余白（顔高さの50%）
-            head_margin = fh * 0.5
+            head_margin = fh * 0.4  # 頭上の余白（顔の40%）
             # クロップ高さは顔の高さ × 2.8倍（頭・余白を含むサイズ）
-            desired_crop_h = fh * 2.8
+            desired_crop_h = fh * 2.2  # 顔の高さの2.2倍（アップ寄り）
             zoom = base_h / desired_crop_h
             zoom = max(1.0, min(5.0, zoom))
             # 全体ズーム倍率を適用
