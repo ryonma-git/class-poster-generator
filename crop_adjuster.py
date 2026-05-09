@@ -1444,6 +1444,7 @@ class CropAdjusterApp:
         # 進捗ダイアログを開く
         output_dir = os.path.join(self.base, "output")
         dlg = ProgressDialog(self.root, title="ポスター生成中...", output_dir=output_dir)
+        self.root.update()  # ダイアログが描画されるまで待つ
 
         def worker():
             try:
