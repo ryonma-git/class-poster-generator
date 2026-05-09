@@ -501,6 +501,7 @@ class CropAdjusterApp:
         self._drag_start = None
         self._drag_start_left = 0
         self._drag_start_top = 0
+        self._modal_count = 0  # サブウィンドウ表示中はメインのキー処理を無効化
 
         # 拡大率（フォントサイズ係数）
         self.scale_factor = 1.0
@@ -937,10 +938,19 @@ class CropAdjusterApp:
         self._listbox_active = active
 
     def _editor_focused(self):
+        # サブウィンドウ表示中はメインのキー処理を無効化
+        if self._modal_count > 0:
+            return False
         w = self.root.focus_get()
         if w in (self.sb_grade, self.sb_cls, self.sb_num):
             return False
         return True
+
+    def _modal_open(self):
+        self._modal_count += 1
+
+    def _modal_close(self):
+        self._modal_count = max(0, self._modal_count - 1)
 
     # ── キーボード ──
     def _bind_keys(self):
@@ -1509,9 +1519,16 @@ class ClassBatchEditor:
         self.selected = set()      # 選択中の生徒番号（空なら全員対象）
         self._last_clicked = None  # Shift+クリック用
 
+        self.app._modal_open()
         self._build_ui()
         self._bind_keys()
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
         self.win.after(100, self._load_and_refresh)
+
+    def _on_close(self):
+        """ウィンドウクローズ（×ボタン or キャンセル）"""
+        self.app._modal_close()
+        self.win.destroy()
 
     def _build_ui(self):
         win = tk.Toplevel(self.app.root)
@@ -1655,11 +1672,11 @@ class ClassBatchEditor:
                 font=(system_font_family(), 9), justify="left"
                 ).pack(side="left")
 
-        MacButton(btnf, "キャンセル", win.destroy,
+        MacButton(btnf, "キャンセル", self._on_close,
                  bg=PALETTE["neutral"], fg=PALETTE["text"],
                  font=(system_font_family(), 12), padx=16, pady=8
                 ).pack(side="right", padx=4)
-        self._apply_btn = MacButton(btnf, "✓ 全員に適用", self._apply,
+        self._apply_btn = MacButton(btnf, "✓ 適用", self._apply,
                  bg=PALETTE["success"], fg="#ffffff",
                  font=(system_font_family(), 12, "bold"), padx=20, pady=8)
         self._apply_btn.pack(side="right", padx=4)
@@ -1891,12 +1908,8 @@ class ClassBatchEditor:
                           highlightthickness=1)
 
     def _update_apply_label(self):
-        """適用ボタンのラベルを選択数で更新"""
-        if hasattr(self, "_apply_btn") and self._apply_btn:
-            if self.selected:
-                self._apply_btn.set_text(f"✓ 選択{len(self.selected)}人に適用")
-            else:
-                self._apply_btn.set_text("✓ 全員に適用")
+        """適用ボタンのラベルを更新（実際は変更があった全員に適用するため固定）"""
+        pass
 
     def _apply(self):
         """working から個別overrideに書き出す。元と差分のあるものだけ保存"""
@@ -1962,6 +1975,7 @@ class ClassBatchEditor:
         messagebox.showinfo("適用完了",
             f"{scope}のクロップ値を保存しました\n"
             f"バックアップ: crop_overrides.csv.bak")
+        self.app._modal_close()
         self.win.destroy()
 
 
@@ -2001,7 +2015,13 @@ class DesignEditor:
         self.config_path = os.path.join(self.app.base, "design_config.json")
         self.config = self._load()
         self._color_buttons = {}
+        self.app._modal_open()
         self._build_ui()
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        self.app._modal_close()
+        self.win.destroy()
 
     def _load(self):
         import json
@@ -2073,7 +2093,7 @@ class DesignEditor:
                  bg=PALETTE["neutral"], fg=PALETTE["text"],
                  font=(system_font_family(), 11), padx=14, pady=8
                 ).pack(side="left")
-        MacButton(btnf, "キャンセル", win.destroy,
+        MacButton(btnf, "キャンセル", self._on_close,
                  bg=PALETTE["neutral"], fg=PALETTE["text"],
                  font=(system_font_family(), 12), padx=16, pady=8
                 ).pack(side="right", padx=4)
@@ -2088,13 +2108,15 @@ class DesignEditor:
                                             title=self.LABELS[key])
         if result and result[1]:
             self.config[key] = result[1]
-            # ボタン全体を再描画
+            # ボタン全体を再描画（modal stackを正しく扱う）
+            self.app._modal_close()
             self.win.destroy()
             DesignEditor(self.app)
 
     def _reset(self):
         if messagebox.askyesno("確認", "すべての色をデフォルトに戻しますか？"):
             self.config = dict(self.DEFAULTS)
+            self.app._modal_close()
             self.win.destroy()
             DesignEditor(self.app)
 
@@ -2104,6 +2126,7 @@ class DesignEditor:
             messagebox.showinfo("保存完了",
                 f"デザイン設定を保存しました\n"
                 f"次のPDF生成から反映されます\n\n{self.config_path}")
+            self.app._modal_close()
             self.win.destroy()
         except Exception as e:
             messagebox.showerror("エラー", f"保存失敗: {e}")
