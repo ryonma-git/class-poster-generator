@@ -96,7 +96,7 @@ def detect_face(pil_img):
 # ════════════════════════════════════════════════════════
 #  クロップ計算
 # ════════════════════════════════════════════════════════
-CELL_ASPECT = 3 / 4
+CELL_ASPECT = 0.875  # 写真エリアの幅:高さ比率（PDFのセル全体3:4 + ラベル分を除いた値）
 
 def calc_crop_box(img_w, img_h, top_pct, left_pct, zoom):
     if img_w / img_h < CELL_ASPECT:
@@ -189,9 +189,10 @@ C_NUM_FG  = (0xE8, 0x9C, 0x2A)
 C_ACCENT  = (0xE8, 0x9C, 0x2A)
 
 def render_poster_cell(cropped_img, num, name, cell_w=240):
-    label_h = 50
-    photo_h = int(cell_w / CELL_ASPECT)
-    cell_h  = photo_h + label_h
+    # セル全体を 3:4、ラベル高さは cell_w の 19%（PDFと一致）
+    cell_h = int(cell_w * 4 / 3)
+    label_h = int(cell_w * 0.19)
+    photo_h = cell_h - label_h
     R = 14
     cell = Image.new("RGBA", (cell_w, cell_h), (0,0,0,0))
     bg = Image.new("RGBA", (cell_w, cell_h), C_CARD + (255,))

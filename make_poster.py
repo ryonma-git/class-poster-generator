@@ -321,13 +321,12 @@ def detect_face(pil_img):
 
 def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0, top_offset=0, left_offset=0):
     """
-    学校個人写真向けクロップ。crop_adjuster.py と完全に同じロジック。
-    重要: aspect は CELL_ASPECT (3/4) で固定（プレビューとの完全一致のため）
+    学校個人写真向けクロップ。
+    aspect は CELL_ASPECT=0.875 で統一（プレビューとの完全一致）
     """
     w, h = pil_img.size
-    # ★ プレビュー (crop_adjuster.py の CELL_ASPECT=3/4) と完全に一致させる
-    CELL_ASPECT = 3 / 4
-    aspect = CELL_ASPECT
+    # ★ プレビューと完全一致：写真エリア比率 = 0.875
+    aspect = 0.875
 
     # ── ベースサイズ計算（zoom=1.0時の最大枠） ──
     if w / h < aspect:
@@ -518,10 +517,8 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
     lh = int(LABEL_H*P)
 
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
-    # ★ 写真エリアの縦横比をプレビューと一致させる (3:4)
-    # photo_h = cw * 4/3
-    photo_h_target = int(cw * 4 / 3)
-    ch = photo_h_target + lh
+    # ★ セル全体（写真+ラベル）の縦横比を 3:4 に
+    ch = int(cw * 4 / 3)
     # 利用可能な総高さに収まるかチェック
     available_h = (ph - mt - hh - mb) - (final_rows - 1) * gr
     required_h = final_rows * ch
@@ -529,8 +526,7 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
         # 全体縮小（cwを縮小）
         scale = available_h / required_h
         cw = int(cw * scale * 0.98)
-        photo_h_target = int(cw * 4 / 3)
-        ch = photo_h_target + lh
+        ch = int(cw * 4 / 3)
 
     # ── ページ描画 ──
     page = Image.new("RGB", (pw,ph), C_BG)
@@ -724,10 +720,8 @@ def _render_single_class_image(grade, cls, folder, roster, photos,
     lh = int(LABEL_H * P)
 
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
-    # ★ 写真エリアの縦横比をプレビューと一致させる (3:4)
-    # photo_h = cw * 4/3
-    photo_h_target = int(cw * 4 / 3)
-    ch = photo_h_target + lh
+    # ★ セル全体（写真+ラベル）の縦横比を 3:4 に
+    ch = int(cw * 4 / 3)
     # 利用可能な総高さに収まるかチェック
     available_h = (ph - mt - hh - mb) - (final_rows - 1) * gr
     required_h = final_rows * ch
@@ -735,8 +729,7 @@ def _render_single_class_image(grade, cls, folder, roster, photos,
         # 全体縮小（cwを縮小）
         scale = available_h / required_h
         cw = int(cw * scale * 0.98)
-        photo_h_target = int(cw * 4 / 3)
-        ch = photo_h_target + lh
+        ch = int(cw * 4 / 3)
 
     # 1クラス分のキャンバス
     page = Image.new("RGB", (pw, ph), C_BG)
