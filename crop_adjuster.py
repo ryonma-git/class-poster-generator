@@ -96,7 +96,7 @@ def detect_face(pil_img):
 # ════════════════════════════════════════════════════════
 #  クロップ計算
 # ════════════════════════════════════════════════════════
-CELL_ASPECT = 0.875  # 写真エリアの幅:高さ比率（PDFのセル全体3:4 + ラベル分を除いた値）
+CELL_ASPECT = 1.02  # PDFの実際の写真エリア比率（A2+6×7のデフォルトケース）
 
 def calc_crop_box(img_w, img_h, top_pct, left_pct, zoom):
     if img_w / img_h < CELL_ASPECT:
@@ -189,10 +189,10 @@ C_NUM_FG  = (0xE8, 0x9C, 0x2A)
 C_ACCENT  = (0xE8, 0x9C, 0x2A)
 
 def render_poster_cell(cropped_img, num, name, cell_w=240):
-    # セル全体を 3:4、ラベル高さは cell_w の 19%（PDFと一致）
-    cell_h = int(cell_w * 4 / 3)
+    # PDFと同じ比率：写真ほぼ正方形（cw:photo_h ≈ 1.02）+ ラベル下
+    photo_h = int(cell_w / 1.02)
     label_h = int(cell_w * 0.19)
-    photo_h = cell_h - label_h
+    cell_h = photo_h + label_h
     R = 14
     cell = Image.new("RGBA", (cell_w, cell_h), (0,0,0,0))
     bg = Image.new("RGBA", (cell_w, cell_h), C_CARD + (255,))
@@ -1461,7 +1461,8 @@ class CropAdjusterApp:
             return
 
         # 進捗ダイアログを開く
-        dlg = ProgressDialog(self.root, title="ポスター生成中...")
+        output_dir = os.path.join(self.base, "output")
+        dlg = ProgressDialog(self.root, title="ポスター生成中...", output_dir=output_dir)
 
         def worker():
             try:
@@ -1501,10 +1502,11 @@ class CropAdjusterApp:
 #  進捗ダイアログ
 # ════════════════════════════════════════════════════════
 class ProgressDialog:
-    def __init__(self, parent, title="生成中..."):
+    def __init__(self, parent, title="生成中...", output_dir=None):
         self.win = tk.Toplevel(parent)
         self.win.title(title)
         self.win.transient(parent)
+        self.output_dir = output_dir
         sw = self.win.winfo_screenwidth()
         sh = self.win.winfo_screenheight()
         ww, wh = 640, 420
@@ -1551,13 +1553,16 @@ class ProgressDialog:
         self.log.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        # 閉じるボタン
+        # ボタンエリア
         btn_frame = tk.Frame(self.win, bg=PALETTE["bg"])
         btn_frame.pack(fill="x", padx=20, pady=(0,16))
         self.close_btn = MacButton(btn_frame, "実行中...", self.win.destroy,
                                   bg=PALETTE["neutral"], fg=PALETTE["text_dim"],
                                   font=(system_font_family(), 12), padx=20, pady=8)
         self.close_btn.pack(side="right")
+        # フォルダを開くボタン（成功時のみ表示）
+        self._open_btn_frame = btn_frame
+        self.open_folder_btn = None
 
     def update(self, percent=None, status=None, log=None):
         if percent is not None:
@@ -1583,7 +1588,28 @@ class ProgressDialog:
             self.close_btn.label.configure(bg=PALETTE["success"], fg="#ffffff",
                                           text="閉じる")
             self.close_btn.configure(bg=PALETTE["success"])
+            # 「フォルダを開く」ボタンを成功時のみ追加
+            if self.output_dir and os.path.exists(self.output_dir):
+                self.open_folder_btn = MacButton(self._open_btn_frame,
+                    "📂 フォルダを開く", self._open_folder,
+                    bg=PALETTE["primary"], fg="#ffffff",
+                    font=(system_font_family(), 12, "bold"), padx=20, pady=8)
+                self.open_folder_btn.pack(side="right", padx=8)
         self.win.update_idletasks()
+
+    def _open_folder(self):
+        """OSに合わせてフォルダを開く"""
+        if not self.output_dir or not os.path.exists(self.output_dir):
+            return
+        try:
+            if IS_MAC:
+                subprocess.Popen(["open", self.output_dir])
+            elif sys.platform.startswith("win"):
+                os.startfile(self.output_dir)
+            else:
+                subprocess.Popen(["xdg-open", self.output_dir])
+        except Exception as e:
+            messagebox.showerror("エラー", f"フォルダを開けませんでした: {e}")
 
 
 # ════════════════════════════════════════════════════════

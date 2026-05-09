@@ -322,11 +322,10 @@ def detect_face(pil_img):
 def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0, top_offset=0, left_offset=0):
     """
     学校個人写真向けクロップ。
-    aspect は CELL_ASPECT=0.875 で統一（プレビューとの完全一致）
+    aspect は target_w/target_h（PDF実際の写真エリア比率）で動的計算
     """
     w, h = pil_img.size
-    # ★ プレビューと完全一致：写真エリア比率 = 0.875
-    aspect = 0.875
+    aspect = target_w / target_h
 
     # ── ベースサイズ計算（zoom=1.0時の最大枠） ──
     if w / h < aspect:
@@ -517,16 +516,9 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
     lh = int(LABEL_H*P)
 
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
-    # ★ セル全体（写真+ラベル）の縦横比を 3:4 に
-    ch = int(cw * 4 / 3)
-    # 利用可能な総高さに収まるかチェック
+    # 紙面いっぱい：cw, ch をそれぞれ独立に計算
     available_h = (ph - mt - hh - mb) - (final_rows - 1) * gr
-    required_h = final_rows * ch
-    if required_h > available_h:
-        # 全体縮小（cwを縮小）
-        scale = available_h / required_h
-        cw = int(cw * scale * 0.98)
-        ch = int(cw * 4 / 3)
+    ch = available_h // final_rows
 
     # ── ページ描画 ──
     page = Image.new("RGB", (pw,ph), C_BG)
@@ -720,16 +712,9 @@ def _render_single_class_image(grade, cls, folder, roster, photos,
     lh = int(LABEL_H * P)
 
     cw = (pw - 2*mx - (use_cols-1)*gc) // use_cols
-    # ★ セル全体（写真+ラベル）の縦横比を 3:4 に
-    ch = int(cw * 4 / 3)
-    # 利用可能な総高さに収まるかチェック
+    # 紙面いっぱい：cw, ch をそれぞれ独立に計算
     available_h = (ph - mt - hh - mb) - (final_rows - 1) * gr
-    required_h = final_rows * ch
-    if required_h > available_h:
-        # 全体縮小（cwを縮小）
-        scale = available_h / required_h
-        cw = int(cw * scale * 0.98)
-        ch = int(cw * 4 / 3)
+    ch = available_h // final_rows
 
     # 1クラス分のキャンバス
     page = Image.new("RGB", (pw, ph), C_BG)
