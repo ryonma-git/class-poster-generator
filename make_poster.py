@@ -321,12 +321,13 @@ def detect_face(pil_img):
 
 def smart_crop(pil_img, target_w, target_h, override=None, zoom_multiplier=1.0, top_offset=0, left_offset=0):
     """
-    学校個人写真向けクロップ。crop_adjuster.py と同じロジック。
-    重要: 頭の上を確実に枠内に収める（顔の高さ × 0.5 の余白）
-    override: {top_pct, left_pct, zoom} を渡すと手動クロップを優先。
+    学校個人写真向けクロップ。crop_adjuster.py と完全に同じロジック。
+    重要: aspect は CELL_ASPECT (3/4) で固定（プレビューとの完全一致のため）
     """
     w, h = pil_img.size
-    aspect = target_w / target_h
+    # ★ プレビュー (crop_adjuster.py の CELL_ASPECT=3/4) と完全に一致させる
+    CELL_ASPECT = 3 / 4
+    aspect = CELL_ASPECT
 
     # ── ベースサイズ計算（zoom=1.0時の最大枠） ──
     if w / h < aspect:

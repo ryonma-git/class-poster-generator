@@ -135,7 +135,7 @@ def auto_initial_crop_params(pil_img):
     head_margin = fh * 0.5
     desired_crop_h = fh * 2.8
     zoom = base_h / desired_crop_h
-    zoom = max(1.0, min(2.5, zoom))
+    zoom = max(1.0, min(5.0, zoom))
     crop_h_actual = base_h / zoom
     desired_y1 = max(0, face_top - head_margin)
     desired_y1 = min(desired_y1, h - crop_h_actual)
@@ -790,7 +790,33 @@ class CropAdjusterApp:
                  takefocus=0).pack()
         tk.Label(right, text="(0.7=引き  1.0=標準  2.0=2倍アップ)",
                  bg=PANEL, fg=DIM, font=self._font(9), anchor="w"
-                ).pack(fill="x", padx=14, pady=(0,8))
+                ).pack(fill="x", padx=14, pady=(0,4))
+
+        # 全体オフセット
+        tk.Label(right, text="一括オフセット (上下/左右)",
+                 bg=PANEL, fg=PALETTE["text_label"], font=self._font(10, True), anchor="w"
+                ).pack(fill="x", padx=14, pady=(8,0))
+        tk.Label(right, text="↓「現クラス再生成」で現クラスのみ /\n　「全クラス再生成」で全体に適用",
+                 bg=PANEL, fg=DIM, font=self._font(9), anchor="w", justify="left"
+                ).pack(fill="x", padx=14, pady=(0,2))
+        self.v_global_top = tk.DoubleVar(value=0)
+        self.v_global_left = tk.DoubleVar(value=0)
+        ofs_row = tk.Frame(right, bg=PANEL)
+        ofs_row.pack(fill="x", padx=14)
+        tk.Scale(ofs_row, from_=-20, to=20, resolution=1,
+                 orient="horizontal", variable=self.v_global_top,
+                 length=240, bg=PANEL, fg=TEXT, label="上下 (-=上)",
+                 troughcolor=PALETTE["panel_alt"], highlightthickness=0,
+                 relief="flat", activebackground=PALETTE["accent"],
+                 showvalue=True, font=self._font(9, True),
+                 takefocus=0).pack()
+        tk.Scale(ofs_row, from_=-20, to=20, resolution=1,
+                 orient="horizontal", variable=self.v_global_left,
+                 length=240, bg=PANEL, fg=TEXT, label="左右 (-=左)",
+                 troughcolor=PALETTE["panel_alt"], highlightthickness=0,
+                 relief="flat", activebackground=PALETTE["accent"],
+                 showvalue=True, font=self._font(9, True),
+                 takefocus=0).pack(pady=(2,8))
 
         tk.Label(right, text="ACTIONS", bg=PANEL, fg=DIM,
                  font=self._font(10, True), anchor="w"
@@ -855,15 +881,56 @@ class CropAdjusterApp:
                  highlightthickness=1, highlightbackground=PALETTE["border"]
                 ).pack(fill="x", side="bottom")
 
-        # CTkScrollableFrame が自動でスクロール対応するため、追加処理不要
+        # 全子ウィジェットにホイールイベントをbind
+        self.root.update_idletasks()
+        self._setup_wheel_bindings()
 
     def _bind_scroll_events(self):
         """互換性のため残す（実体は _setup_wheel_bindings）"""
         pass
 
     def _setup_wheel_bindings(self):
-        """CTkScrollableFrame が自動対応するため、互換性のため残すのみ"""
-        pass
+        """全子ウィジェットにマウスホイールイベントを再帰的にbind
+        CTkScrollableFrame の内部Canvas を使って確実にスクロール"""
+        if not hasattr(self, "_main_scroll") or not HAS_CTK:
+            return
+        # CTkScrollableFrame の内部Canvas を取得
+        try:
+            inner_canvas = self._main_scroll._parent_canvas
+        except AttributeError:
+            return
+
+        def _on_wheel(event):
+            if IS_MAC:
+                step = -1 * int(event.delta)
+            else:
+                step = -1 * int(event.delta / 120)
+            if step == 0:
+                step = -1 if event.delta > 0 else 1
+            inner_canvas.yview_scroll(step, "units")
+            return "break"
+
+        def _bind_recursive(widget):
+            try:
+                widget.bind("<MouseWheel>", _on_wheel, add="+")
+                widget.bind("<Button-4>",
+                    lambda e: (inner_canvas.yview_scroll(-1, "units"), "break")[1], add="+")
+                widget.bind("<Button-5>",
+                    lambda e: (inner_canvas.yview_scroll(1, "units"), "break")[1], add="+")
+            except: pass
+            for child in widget.winfo_children():
+                _bind_recursive(child)
+
+        # CTkScrollableFrame全体と全子ウィジェット
+        _bind_recursive(self._main_scroll)
+        # 内部Canvas自体にも
+        try:
+            inner_canvas.bind("<MouseWheel>", _on_wheel, add="+")
+            inner_canvas.bind("<Button-4>",
+                lambda e: (inner_canvas.yview_scroll(-1, "units"), "break")[1], add="+")
+            inner_canvas.bind("<Button-5>",
+                lambda e: (inner_canvas.yview_scroll(1, "units"), "break")[1], add="+")
+        except: pass
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):
@@ -963,16 +1030,17 @@ class CropAdjusterApp:
             ref_zoom = existing['zoom']
         else:
             ref_top, ref_left, ref_zoom = self.auto_initial
-        # 微小差は無視
-        if (abs(cur_top - ref_top) > 0.5 or
-            abs(cur_left - ref_left) > 0.5 or
-            abs(cur_zoom - ref_zoom) > 0.05):
+        # 微小差を厳しく（0.1以上で保存）
+        if (abs(cur_top - ref_top) > 0.1 or
+            abs(cur_left - ref_left) > 0.1 or
+            abs(cur_zoom - ref_zoom) > 0.005):
             self.overrides[(g,c,n)] = {
                 'top_pct': cur_top, 'left_pct': cur_left, 'zoom': cur_zoom,
             }
             save_overrides(self.override_path, self.overrides)
             self.saved_var.set(f"調整済み {len(self.overrides)}件")
             self._refresh_class_list()
+            self.status_var.set(f"  ✓ {g}年{c}組{n:02d}番 自動保存")
 
     def _key_left(self, e):
         if not self._editor_focused() or self._listbox_active: return
@@ -1175,15 +1243,20 @@ class CropAdjusterApp:
     def save_current(self):
         if not self.current_key: return
         g, c, n = self.current_key
+        # スライダー値を確実に取得（update_idletasks で同期）
+        self.root.update_idletasks()
+        cur_top = float(self.v_top.get())
+        cur_left = float(self.v_left.get())
+        cur_zoom = float(self.v_zoom.get())
         self.overrides[(g,c,n)] = {
-            'top_pct': float(self.v_top.get()),
-            'left_pct': float(self.v_left.get()),
-            'zoom': float(self.v_zoom.get()),
+            'top_pct': cur_top,
+            'left_pct': cur_left,
+            'zoom': cur_zoom,
         }
         save_overrides(self.override_path, self.overrides)
         self.saved_var.set(f"調整済み {len(self.overrides)}件")
         self._refresh_class_list()
-        self.status_var.set(f"  ✓ {g}年{c}組{n:02d}番 を保存しました")
+        self.status_var.set(f"  ✓ {g}年{c}組{n:02d}番 保存 (top={cur_top:.1f}, left={cur_left:.1f}, zoom={cur_zoom:.2f})")
         if self.v_auto_pdf.get():
             self.regen_current_class()
         self.next_photo()
@@ -1360,11 +1433,21 @@ class CropAdjusterApp:
 
     def _run_poster(self, extra_args, msg):
         self.status_var.set(msg)
-        # 全体ズーム倍率を追加
+        # 全体ズーム倍率
         if hasattr(self, 'v_global_zoom'):
             zm = float(self.v_global_zoom.get())
             if abs(zm - 1.0) > 0.01:
                 extra_args = list(extra_args) + ["--zoom-multiplier", f"{zm:.2f}"]
+        # 全体オフセット
+        if hasattr(self, 'v_global_top'):
+            tof = float(self.v_global_top.get())
+            if abs(tof) > 0.01:
+                extra_args = list(extra_args) + ["--top-offset", f"{tof:.1f}"]
+        if hasattr(self, 'v_global_left'):
+            lof = float(self.v_global_left.get())
+            if abs(lof) > 0.01:
+                extra_args = list(extra_args) + ["--left-offset", f"{lof:.1f}"]
+
         candidates = [
             os.path.join(self.base, "make_poster.py"),
             os.path.join(self.base, "make_poster_v8.py"),
@@ -1375,20 +1458,131 @@ class CropAdjusterApp:
         if not script:
             messagebox.showerror("エラー", "make_poster.py が見つかりません。")
             return
+
+        # 進捗ダイアログを開く
+        dlg = ProgressDialog(self.root, title="ポスター生成中...")
+
         def worker():
             try:
                 cmd = [sys.executable, script, "--base", self.base,
                        "--out", os.path.join(self.base, "output")] + extra_args
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-                if r.returncode == 0:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT,
+                                       text=True, bufsize=1, encoding='utf-8')
+                # 進捗推定: ▶マークを数えて分数で % を出す
+                total_classes = len(self.classes_list) or 19
+                done = 0
+                for line in iter(proc.stdout.readline, ''):
+                    line = line.rstrip()
+                    if not line: continue
+                    if "▶" in line:
+                        done += 1
+                        pct = min(99, int((done / total_classes) * 100))
+                        self.root.after(0, lambda l=line, p=pct:
+                            dlg.update(p, status=l, log=l))
+                    else:
+                        self.root.after(0, lambda l=line: dlg.update(None, log=l))
+                proc.wait()
+                if proc.returncode == 0:
+                    self.root.after(0, lambda: dlg.finish("PDF生成完了"))
                     self.root.after(0, lambda: self.status_var.set("  ✓ PDF再生成完了"))
                 else:
-                    err = (r.stderr or r.stdout)[-400:]
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "PDF生成エラー", f"エラー:\n{err}"))
+                    self.root.after(0, lambda: dlg.finish(
+                        f"エラー終了 (code {proc.returncode})", error=True))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("実行エラー", str(e)))
+                err_str = str(e)
+                self.root.after(0, lambda: dlg.finish(f"例外: {err_str}", error=True))
         threading.Thread(target=worker, daemon=True).start()
+
+
+
+# ════════════════════════════════════════════════════════
+#  進捗ダイアログ
+# ════════════════════════════════════════════════════════
+class ProgressDialog:
+    def __init__(self, parent, title="生成中..."):
+        self.win = tk.Toplevel(parent)
+        self.win.title(title)
+        self.win.transient(parent)
+        sw = self.win.winfo_screenwidth()
+        sh = self.win.winfo_screenheight()
+        ww, wh = 640, 420
+        self.win.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
+        self.win.configure(bg=PALETTE["bg"])
+
+        # ヘッダー
+        h = tk.Frame(self.win, bg=PALETTE["primary"], height=44)
+        h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text=title, bg=PALETTE["primary"], fg="#ffffff",
+                font=(system_font_family(), 13, "bold")
+                ).pack(side="left", padx=16, pady=10)
+
+        # プログレスバー
+        self.pb_var = tk.DoubleVar(value=0)
+        style = ttk.Style()
+        try:
+            style.configure("PG.Horizontal.TProgressbar",
+                          background=PALETTE["primary"],
+                          troughcolor=PALETTE["panel_alt"])
+        except: pass
+        self.pb = ttk.Progressbar(self.win, orient="horizontal",
+                                  mode="determinate",
+                                  variable=self.pb_var, maximum=100,
+                                  style="PG.Horizontal.TProgressbar")
+        self.pb.pack(fill="x", padx=20, pady=(20,4))
+
+        # ステータス
+        self.status_var = tk.StringVar(value="開始しています...")
+        tk.Label(self.win, textvariable=self.status_var,
+                bg=PALETTE["bg"], fg=PALETTE["text"],
+                font=(system_font_family(), 11),
+                anchor="w", wraplength=600
+                ).pack(fill="x", padx=20, pady=4)
+
+        # ログ
+        log_frame = tk.Frame(self.win, bg=PALETTE["bg"])
+        log_frame.pack(fill="both", expand=True, padx=20, pady=(8,12))
+        self.log = tk.Text(log_frame, font=("Menlo", 10),
+                          bg=PALETTE["panel_alt"], fg=PALETTE["text"],
+                          relief="flat", height=10, wrap="word")
+        sb = ttk.Scrollbar(log_frame, command=self.log.yview)
+        self.log.configure(yscrollcommand=sb.set)
+        self.log.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        # 閉じるボタン
+        btn_frame = tk.Frame(self.win, bg=PALETTE["bg"])
+        btn_frame.pack(fill="x", padx=20, pady=(0,16))
+        self.close_btn = MacButton(btn_frame, "実行中...", self.win.destroy,
+                                  bg=PALETTE["neutral"], fg=PALETTE["text_dim"],
+                                  font=(system_font_family(), 12), padx=20, pady=8)
+        self.close_btn.pack(side="right")
+
+    def update(self, percent=None, status=None, log=None):
+        if percent is not None:
+            self.pb_var.set(percent)
+        if status:
+            self.status_var.set(status)
+        if log:
+            self.log.insert("end", log + "\n")
+            self.log.see("end")
+        self.win.update_idletasks()
+
+    def finish(self, message="完了", error=False):
+        self.pb_var.set(100)
+        if error:
+            self.status_var.set("✗ " + message)
+            self.close_btn.bg = PALETTE["danger"]
+            self.close_btn.label.configure(bg=PALETTE["danger"], fg="#ffffff",
+                                          text="閉じる")
+            self.close_btn.configure(bg=PALETTE["danger"])
+        else:
+            self.status_var.set("✓ " + message)
+            self.close_btn.bg = PALETTE["success"]
+            self.close_btn.label.configure(bg=PALETTE["success"], fg="#ffffff",
+                                          text="閉じる")
+            self.close_btn.configure(bg=PALETTE["success"])
+        self.win.update_idletasks()
 
 
 # ════════════════════════════════════════════════════════

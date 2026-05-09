@@ -6,6 +6,18 @@ set -e
 
 DOWNLOADS="$HOME/Downloads"
 REPO_DIR="$HOME/Projects/class-poster-generator"
+
+# ── deploy.sh 自身の更新（Downloadsに新しいのがあれば自動取得して再実行）──
+SELF="$REPO_DIR/deploy.sh"
+if [ -f "$DOWNLOADS/deploy.sh" ] && [ -f "$SELF" ]; then
+    if ! cmp -s "$DOWNLOADS/deploy.sh" "$SELF"; then
+        echo "📥 新しい deploy.sh を取得して再実行します..."
+        cp "$DOWNLOADS/deploy.sh" "$SELF"
+        chmod +x "$SELF"
+        exec bash "$SELF" "$@"
+    fi
+fi
+
 PHOTO_DIR="/Users/ryon/My M2/帰国後/石橋小26/【26年度】_クラス個別写真"
 VENV_PATH="$PHOTO_DIR/.venv"
 PYTHON_BIN="$VENV_PATH/bin/python3"
@@ -21,7 +33,7 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 # ── 1. ダウンロードから取得 ──
 echo -e "\n${YELLOW}[1/5] ダウンロードからスクリプト取得${NC}"
 COPIED=0
-for f in crop_adjuster.py make_poster.py; do
+for f in crop_adjuster.py make_poster.py requirements.txt teachers_template.csv; do
     if [ -f "$DOWNLOADS/$f" ]; then
         cp "$DOWNLOADS/$f" "$REPO_DIR/$f"
         echo -e "  ${GREEN}✓${NC} $f を取得"
