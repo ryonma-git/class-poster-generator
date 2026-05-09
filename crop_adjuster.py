@@ -829,7 +829,8 @@ class CropAdjusterApp:
               "S            保存→次へ\n"
               "R            リセット\n"
               "F            顔検出やり直し\n"
-              "⌘+ / ⌘−    画面拡大/縮小")
+              "⌘+/− (Mac)   画面拡大/縮小\n"
+              "Ctrl+/− (Win)  画面拡大/縮小")
         tk.Label(right, text=sc, bg=PANEL, fg=LABEL,
                  font=("Menlo", int(10*self.scale_factor)),
                  justify="left", anchor="w"
@@ -1614,6 +1615,18 @@ class ClassBatchEditor:
         self._thumb_window = self.thumb_canvas.create_window(
             (0, 0), window=self.thumb_frame, anchor="nw")
 
+        # 空白クリックで選択解除
+        def _on_blank_click(event):
+            if self.selected:
+                self._commit_sliders_to_working()
+                self.selected.clear()
+                self._last_clicked = None
+                self._update_selection_visual()
+                self._update_apply_label()
+                self._refresh_thumbnails()
+        self.thumb_canvas.bind("<Button-1>", _on_blank_click)
+        self.thumb_frame.bind("<Button-1>", _on_blank_click)
+
         def _on_frame_config(e):
             self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
         self.thumb_frame.bind("<Configure>", _on_frame_config)
@@ -1636,8 +1649,8 @@ class ClassBatchEditor:
         btnf = tk.Frame(win, bg=PALETTE["bg"])
         btnf.pack(fill="x", padx=14, pady=(0, 12))
 
-        tk.Label(btnf, text="※ ⌘+クリック=個別追加 / Shift+クリック=範囲 / ⌘A=全選択 / Esc=解除\n"
-                     "※ ↑↓←→=顔の移動 / Shift+↑↓=ズーム / 選択切替で値が確定",
+        tk.Label(btnf, text="※ ⌘/Ctrl+クリック=個別追加 / Shift+クリック=範囲 / ⌘/Ctrl+A=全選択 / Esc=解除 / 空白=解除\n"
+                     "※ ↑↓←→=顔の移動 / Shift+↑↓=ズーム / 選択を変えると値が確定",
                 bg=PALETTE["bg"], fg=PALETTE["text_dim"],
                 font=(system_font_family(), 9), justify="left"
                 ).pack(side="left")
@@ -1865,6 +1878,7 @@ class ClassBatchEditor:
 
         self._update_selection_visual()
         self._update_apply_label()
+        return "break"  # 親canvasに伝播させない
 
     def _update_selection_visual(self):
         """選択中サムネを青枠で強調"""
@@ -1895,30 +1909,28 @@ class ClassBatchEditor:
             try: shutil.copy2(self.app.override_path, bak)
             except: pass
 
-        # 対象決定: 選択中があればそれ、なければ「変更があった全員」
-        if self.selected:
-            target_nums = sorted(self.selected)
-        else:
-            target_nums = []
-            for n in self.nums:
-                if n not in self.working: continue
-                w = self.working[n]
-                orig = self.original.get(n)
-                if orig:
-                    diff = (abs(w["top_pct"] - orig["top_pct"]) > 0.05 or
-                            abs(w["left_pct"] - orig["left_pct"]) > 0.05 or
-                            abs(w["zoom"] - orig["zoom"]) > 0.005)
+        # 対象: 選択に関わらず「working が変化のあった全員」
+        # （誤動作防止：選択していなくてもスライダー差分で動かしたものは保存対象）
+        target_nums = []
+        for n in self.nums:
+            if n not in self.working: continue
+            w = self.working[n]
+            orig = self.original.get(n)
+            if orig:
+                diff = (abs(w["top_pct"] - orig["top_pct"]) > 0.05 or
+                        abs(w["left_pct"] - orig["left_pct"]) > 0.05 or
+                        abs(w["zoom"] - orig["zoom"]) > 0.005)
+            else:
+                # 未調整 → face_cacheの値と比較
+                if n in self.face_cache:
+                    t, l, z = self.face_cache[n]
+                    diff = (abs(w["top_pct"] - t) > 0.05 or
+                            abs(w["left_pct"] - l) > 0.05 or
+                            abs(w["zoom"] - z) > 0.005)
                 else:
-                    # 未調整 → face_cacheの値と比較
-                    if n in self.face_cache:
-                        t, l, z = self.face_cache[n]
-                        diff = (abs(w["top_pct"] - t) > 0.05 or
-                                abs(w["left_pct"] - l) > 0.05 or
-                                abs(w["zoom"] - z) > 0.005)
-                    else:
-                        diff = True
-                if diff:
-                    target_nums.append(n)
+                    diff = True
+            if diff:
+                target_nums.append(n)
 
         if not target_nums:
             messagebox.showinfo("情報", "変更されたデータがありません")
@@ -1938,7 +1950,7 @@ class ClassBatchEditor:
         save_overrides(self.app.override_path, self.app.overrides)
         self.app.saved_var.set(f"調整済み {len(self.app.overrides)}件")
         self.app._refresh_class_list()
-        scope = f"選択{count}人" if self.selected else f"変更のあった{count}人"
+        scope = f"変更のあった{count}人"
         self.app.status_var.set(f"  ✓ {self.grade}年{self.cls}組 {scope}を保存")
 
         # メインアプリの現在生徒もリロード
