@@ -38,6 +38,34 @@ DEFAULT_ROWS = 7    # クラス単位ポスターのデフォルト行数
 C_HDR_BG  = (0x2B,0x5F,0x8E)
 C_HDR_SUB = (0x4A,0x90,0xC4)
 C_ACCENT  = (0xE8,0x9C,0x2A)
+def load_design_config(base):
+    """design_config.json を読み込み、なければデフォルト"""
+    import json
+    defaults = {
+        "background":  "#f0f4fa",
+        "card_bg":     "#f7f9fc",
+        "label_bg":    "#2b5f8e",
+        "label_fg":    "#ffffff",
+        "number_fg":   "#e89c2a",
+        "accent":      "#e89c2a",
+        "header_bg":   "#1a4d80",
+        "header_sub":  "#2b5f8e",
+    }
+    cfg_path = os.path.join(base, "design_config.json")
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                user_cfg = json.load(f)
+                defaults.update(user_cfg)
+        except: pass
+    return defaults
+
+
+def hex_to_rgb(h):
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
 C_CARD    = (0xF7,0xF9,0xFC)
 C_LBL_BG  = (0x2B,0x5F,0x8E)
 C_LBL_FG  = (0xFF,0xFF,0xFF)
