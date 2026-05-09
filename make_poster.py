@@ -814,6 +814,22 @@ def main():
     if teachers_data:
         print(f"  担任情報: {len(teachers_data)}クラス分")
 
+    # ★ デザイン設定を読み込む
+    global C_CARD, C_LBL_BG, C_LBL_FG, C_NUM_FG, C_ACCENT, C_BG, C_HDR_BG, C_HDR_SUB
+    design = load_design_config(args.base)
+    try:
+        C_CARD   = hex_to_rgb(design["card_bg"])
+        C_LBL_BG = hex_to_rgb(design["label_bg"])
+        C_LBL_FG = hex_to_rgb(design["label_fg"])
+        C_NUM_FG = hex_to_rgb(design["number_fg"])
+        C_ACCENT = hex_to_rgb(design["accent"])
+        C_BG     = hex_to_rgb(design["background"])
+        C_HDR_BG = hex_to_rgb(design["header_bg"])
+        C_HDR_SUB= hex_to_rgb(design["header_sub"])
+        print(f"  デザイン設定: design_config.json から読込")
+    except Exception as e:
+        print(f"  デザイン設定: デフォルト使用 ({e})")
+
     # 紙サイズ判定
     paper = args.paper
     if paper is None:

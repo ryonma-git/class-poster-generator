@@ -810,6 +810,11 @@ class CropAdjusterApp:
                  font=self._font(11, True), padx=10, pady=10
                 ).pack(fill="x", padx=14, pady=4)
 
+        MacButton(right, "🎨 デザイン設定", self.show_design_editor,
+                 bg=PALETTE["accent"], fg="#ffffff",
+                 font=self._font(11, True), padx=10, pady=10
+                ).pack(fill="x", padx=14, pady=4)
+
         MacButton(right, "⚙ 出力ウィザード", self.show_wizard,
                  bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
                  font=self._font(11, True), padx=10, pady=10
@@ -1386,6 +1391,10 @@ class CropAdjusterApp:
         self._run_poster(["--grade", str(g), "--cls", str(c)],
                          f"  ⏳ {g}年{c}組のPDF再生成中...")
 
+    def show_design_editor(self):
+        """デザイン設定画面を開く"""
+        DesignEditor(self)
+
     def show_batch_editor(self):
         """クラス一括調整画面を開く"""
         if not self.current_key:
@@ -1491,9 +1500,12 @@ class ClassBatchEditor:
         self.v_top_add = tk.DoubleVar(value=0)
         self.v_left_add = tk.DoubleVar(value=0)
 
-        self._thumb_widgets = {}  # num -> Label
+        self._thumb_widgets = {}  # num -> Frame
+        self.selected = set()      # 選択中の生徒番号（空なら全員対象）
+        self._last_clicked = None  # Shift+クリック用
 
         self._build_ui()
+        self._bind_keys()
         self.win.after(100, self._load_and_refresh)
 
     def _build_ui(self):
@@ -1620,25 +1632,59 @@ class ClassBatchEditor:
         btnf = tk.Frame(win, bg=PALETTE["bg"])
         btnf.pack(fill="x", padx=14, pady=(0, 12))
 
-        tk.Label(btnf, text="※「全員に適用」で個別調整値が書き換わります（バックアップは自動取得）",
+        tk.Label(btnf, text="※ ⌘+クリック=個別追加 / Shift+クリック=範囲 / ⌘A=全選択 / Esc=解除\n"
+                     "※ ↑↓←→=位置 / Shift+↑↓=ズーム",
                 bg=PALETTE["bg"], fg=PALETTE["text_dim"],
-                font=(system_font_family(), 10)
+                font=(system_font_family(), 9), justify="left"
                 ).pack(side="left")
 
         MacButton(btnf, "キャンセル", win.destroy,
                  bg=PALETTE["neutral"], fg=PALETTE["text"],
                  font=(system_font_family(), 12), padx=16, pady=8
                 ).pack(side="right", padx=4)
-        MacButton(btnf, "✓ 全員に適用", self._apply,
+        self._apply_btn = MacButton(btnf, "✓ 全員に適用", self._apply,
                  bg=PALETTE["success"], fg="#ffffff",
-                 font=(system_font_family(), 12, "bold"), padx=20, pady=8
-                ).pack(side="right", padx=4)
+                 font=(system_font_family(), 12, "bold"), padx=20, pady=8)
+        self._apply_btn.pack(side="right", padx=4)
 
     def _schedule_refresh(self):
         if hasattr(self, "_refresh_after_id") and self._refresh_after_id:
             try: self.win.after_cancel(self._refresh_after_id)
             except: pass
         self._refresh_after_id = self.win.after(300, self._refresh_thumbnails)
+
+    def _bind_keys(self):
+        """キー操作: 矢印で上下/左右オフセット、Shift+矢印でズーム、A/Dで選択クラスを移動"""
+        w = self.win
+        def step(var, delta, lo, hi):
+            new = max(lo, min(hi, var.get() + delta))
+            var.set(new)
+            self._schedule_refresh()
+        w.bind("<Up>",         lambda e: step(self.v_top_add, -1, -20, 20))
+        w.bind("<Down>",       lambda e: step(self.v_top_add, +1, -20, 20))
+        w.bind("<Left>",       lambda e: step(self.v_left_add, -1, -20, 20))
+        w.bind("<Right>",      lambda e: step(self.v_left_add, +1, -20, 20))
+        w.bind("<Shift-Up>",   lambda e: step(self.v_zoom_mult, +0.05, 0.5, 2.0))
+        w.bind("<Shift-Down>", lambda e: step(self.v_zoom_mult, -0.05, 0.5, 2.0))
+        # Cmd+A で全選択
+        if IS_MAC:
+            w.bind("<Command-a>", lambda e: self._select_all())
+        else:
+            w.bind("<Control-a>", lambda e: self._select_all())
+        w.bind("<Escape>", lambda e: self._clear_selection())
+
+    def _select_all(self):
+        self.selected = set(self.nums)
+        self._update_selection_visual()
+        self._update_apply_label()
+        return "break"
+
+    def _clear_selection(self):
+        self.selected.clear()
+        self._last_clicked = None
+        self._update_selection_visual()
+        self._update_apply_label()
+        return "break"
 
     def _reset_sliders(self):
         self.v_zoom_mult.set(1.0)
@@ -1691,14 +1737,16 @@ class ClassBatchEditor:
         self._thumb_widgets.clear()
 
         # 6列のグリッド表示
-        cols = 6
+        self._cols = 6
         thumb_w = 140
-        thumb_h = int(thumb_w / 1.02)  # CELL_ASPECT
+        thumb_h = int(thumb_w / 1.02)
         for idx, n in enumerate(self.nums):
             if n not in self.image_cache: continue
-            row, col = divmod(idx, cols)
+            row, col = divmod(idx, self._cols)
             cell = tk.Frame(self.thumb_frame, bg=PALETTE["panel"],
-                          highlightthickness=1, highlightbackground=PALETTE["border"])
+                          highlightthickness=2,
+                          highlightbackground=PALETTE["border"],
+                          cursor="hand2")
             cell.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
 
             top, left, zoom = self._calc_values(n)
@@ -1706,34 +1754,106 @@ class ClassBatchEditor:
                 cropped = do_crop(self.image_cache[n], top, left, zoom)
                 cropped_thumb = cropped.resize((thumb_w, thumb_h), Image.LANCZOS)
                 photo_tk = ImageTk.PhotoImage(cropped_thumb)
-                lbl = tk.Label(cell, image=photo_tk, bg=PALETTE["panel"])
-                lbl.image = photo_tk  # 参照保持
+                lbl = tk.Label(cell, image=photo_tk, bg=PALETTE["panel"],
+                              cursor="hand2")
+                lbl.image = photo_tk
                 lbl.pack()
+                # クリックイベントを画像とセルに
+                for w in (cell, lbl):
+                    w.bind("<Button-1>",
+                          lambda e, num=n: self._on_thumb_click(e, num))
             except Exception as e:
-                tk.Label(cell, text=f"err: {e}", bg=PALETTE["panel"],
+                tk.Label(cell, text=f"err", bg=PALETTE["panel"],
                         fg=PALETTE["danger"], font=(system_font_family(), 9)
                         ).pack()
 
             name = self.roster.get(n, f"{n}番")
             short = name if len(name) <= 8 else name[:7] + "…"
-            tk.Label(cell, text=f"{n:02d} {short}", bg=PALETTE["panel"],
-                    fg=PALETTE["text"], font=(system_font_family(), 9)
-                    ).pack(pady=(0, 4))
+            name_lbl = tk.Label(cell, text=f"{n:02d} {short}", bg=PALETTE["panel"],
+                              fg=PALETTE["text"], font=(system_font_family(), 9),
+                              cursor="hand2")
+            name_lbl.pack(pady=(0, 4))
+            name_lbl.bind("<Button-1>",
+                         lambda e, num=n: self._on_thumb_click(e, num))
+
             self._thumb_widgets[n] = cell
 
+        # 選択状態を反映
+        self._update_selection_visual()
         self.thumb_frame.update_idletasks()
         self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
 
+    def _on_thumb_click(self, event, num):
+        """サムネクリック: 選択処理"""
+        # macOS: Cmd = state & 0x0010 (Mod1) もしくは 0x00100000
+        # Shift = state & 0x0001
+        is_shift = bool(event.state & 0x0001)
+        is_cmd = bool(event.state & 0x0008) or bool(event.state & 0x00100000) or bool(event.state & 0x0010)
+
+        if is_shift and self._last_clicked is not None:
+            # Shift+クリック: 範囲選択（前回クリックから今回までを追加）
+            try:
+                idx_a = self.nums.index(self._last_clicked)
+                idx_b = self.nums.index(num)
+                lo, hi = min(idx_a, idx_b), max(idx_a, idx_b)
+                for i in range(lo, hi + 1):
+                    self.selected.add(self.nums[i])
+            except ValueError: pass
+        elif is_cmd:
+            # Cmd/Ctrl+クリック: 個別追加/削除（トグル）
+            if num in self.selected:
+                self.selected.discard(num)
+            else:
+                self.selected.add(num)
+            self._last_clicked = num
+        else:
+            # 通常クリック: 単一選択（既選択なら解除）
+            if num in self.selected and len(self.selected) == 1:
+                self.selected.clear()
+                self._last_clicked = None
+            else:
+                self.selected = {num}
+                self._last_clicked = num
+
+        self._update_selection_visual()
+        self._update_apply_label()
+
+    def _update_selection_visual(self):
+        """選択中サムネを青枠で強調"""
+        for n, w in self._thumb_widgets.items():
+            if n in self.selected:
+                w.configure(highlightbackground=PALETTE["primary"],
+                          highlightthickness=3)
+            else:
+                w.configure(highlightbackground=PALETTE["border"],
+                          highlightthickness=1)
+
+    def _update_apply_label(self):
+        """適用ボタンのラベルを選択数で更新"""
+        if hasattr(self, "_apply_btn") and self._apply_btn:
+            if self.selected:
+                self._apply_btn.set_text(f"✓ 選択{len(self.selected)}人に適用")
+            else:
+                self._apply_btn.set_text("✓ 全員に適用")
+
     def _apply(self):
-        """個別overrideを書き換える"""
+        """個別overrideを書き換える（選択中があればそれのみ、なければ全員）"""
         # バックアップ
         if os.path.exists(self.app.override_path):
             bak = self.app.override_path + ".bak"
             try: shutil.copy2(self.app.override_path, bak)
             except: pass
 
+        # 対象決定
+        if self.selected:
+            target_nums = sorted(self.selected)
+            scope = f"選択{len(target_nums)}人"
+        else:
+            target_nums = self.nums
+            scope = f"全員{len(target_nums)}人"
+
         count = 0
-        for n in self.nums:
+        for n in target_nums:
             top, left, zoom = self._calc_values(n)
             self.app.overrides[(self.grade, self.cls, n)] = {
                 "top_pct": top, "left_pct": left, "zoom": zoom,
@@ -1743,11 +1863,162 @@ class ClassBatchEditor:
         save_overrides(self.app.override_path, self.app.overrides)
         self.app.saved_var.set(f"調整済み {len(self.app.overrides)}件")
         self.app._refresh_class_list()
-        self.app.status_var.set(f"  ✓ {self.grade}年{self.cls}組 {count}人を一括更新")
+        self.app.status_var.set(f"  ✓ {self.grade}年{self.cls}組 {scope}を一括更新")
+
+        # ★ メインアプリの現在生徒もリロード
+        if self.app.current_key:
+            g, c, n = self.app.current_key
+            if g == self.grade and c == self.cls and n in self.app.photos:
+                self.app._load(g, c, n)
+
         messagebox.showinfo("適用完了",
-            f"{count}人のクロップ値を更新しました\n"
+            f"{scope}のクロップ値を更新しました\n"
             f"バックアップ: crop_overrides.csv.bak")
         self.win.destroy()
+
+
+
+# ════════════════════════════════════════════════════════
+#  デザイン設定エディタ（色のカスタマイズ）
+# ════════════════════════════════════════════════════════
+class DesignEditor:
+    """ポスターのカラーをカスタマイズする画面"""
+
+    DEFAULTS = {
+        "background":  "#f0f4fa",
+        "card_bg":     "#f7f9fc",
+        "label_bg":    "#2b5f8e",
+        "label_fg":    "#ffffff",
+        "number_fg":   "#e89c2a",
+        "accent":      "#e89c2a",
+        "header_bg":   "#1a4d80",
+        "header_sub":  "#2b5f8e",
+    }
+
+    LABELS = {
+        "background":  "ポスター背景",
+        "card_bg":     "カード背景（写真の枠）",
+        "label_bg":    "ネームタグ背景",
+        "label_fg":    "ネームタグ文字",
+        "number_fg":   "番号の色",
+        "accent":      "アクセント色（区切り線）",
+        "header_bg":   "ヘッダー背景",
+        "header_sub":  "ヘッダー左側",
+    }
+
+    def __init__(self, parent_app):
+        from tkinter import colorchooser
+        self.colorchooser = colorchooser
+        self.app = parent_app
+        self.config_path = os.path.join(self.app.base, "design_config.json")
+        self.config = self._load()
+        self._color_buttons = {}
+        self._build_ui()
+
+    def _load(self):
+        import json
+        cfg = dict(self.DEFAULTS)
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, encoding="utf-8") as f:
+                    cfg.update(json.load(f))
+            except: pass
+        return cfg
+
+    def _save(self):
+        import json
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(self.config, f, indent=2, ensure_ascii=False)
+
+    def _build_ui(self):
+        win = tk.Toplevel(self.app.root)
+        self.win = win
+        win.title("デザイン設定")
+        win.configure(bg=PALETTE["bg"])
+        sw = win.winfo_screenwidth(); sh = win.winfo_screenheight()
+        ww, wh = 720, 640
+        win.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
+        win.transient(self.app.root)
+
+        # ヘッダー
+        h = tk.Frame(win, bg=PALETTE["primary"], height=46)
+        h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text="🎨  デザイン設定",
+                bg=PALETTE["primary"], fg="#ffffff",
+                font=(system_font_family(), 14, "bold")
+                ).pack(side="left", padx=20, pady=12)
+
+        body = tk.Frame(win, bg=PALETTE["bg"])
+        body.pack(fill="both", expand=True, padx=20, pady=16)
+
+        tk.Label(body, text="クリックで色を変更（保存するとPDFに反映）",
+                bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                font=(system_font_family(), 11)
+                ).pack(anchor="w", pady=(0, 12))
+
+        # 各色のボタン
+        for key, label in self.LABELS.items():
+            row = tk.Frame(body, bg=PALETTE["panel"],
+                          highlightthickness=1, highlightbackground=PALETTE["border"])
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=label, bg=PALETTE["panel"],
+                    fg=PALETTE["text_label"], font=(system_font_family(), 11),
+                    width=24, anchor="w", padx=14, pady=10
+                    ).pack(side="left")
+            color_val = self.config.get(key, self.DEFAULTS[key])
+            sw_btn = tk.Frame(row, bg=color_val, width=80, height=28,
+                            highlightthickness=1, highlightbackground=PALETTE["border"],
+                            cursor="hand2")
+            sw_btn.pack(side="left", padx=8, pady=10)
+            sw_btn.pack_propagate(False)
+            sw_btn.bind("<Button-1>", lambda e, k=key: self._pick_color(k))
+            tk.Label(row, text=color_val, bg=PALETTE["panel"],
+                    fg=PALETTE["text_dim"], font=("Menlo", 10),
+                    width=10, anchor="w"
+                    ).pack(side="left", padx=8)
+            self._color_buttons[key] = sw_btn
+
+        # ボタン
+        btnf = tk.Frame(win, bg=PALETTE["bg"])
+        btnf.pack(fill="x", padx=20, pady=(0, 16))
+        MacButton(btnf, "↺ デフォルトに戻す", self._reset,
+                 bg=PALETTE["neutral"], fg=PALETTE["text"],
+                 font=(system_font_family(), 11), padx=14, pady=8
+                ).pack(side="left")
+        MacButton(btnf, "キャンセル", win.destroy,
+                 bg=PALETTE["neutral"], fg=PALETTE["text"],
+                 font=(system_font_family(), 12), padx=16, pady=8
+                ).pack(side="right", padx=4)
+        MacButton(btnf, "✓ 保存", self._on_save,
+                 bg=PALETTE["success"], fg="#ffffff",
+                 font=(system_font_family(), 12, "bold"), padx=20, pady=8
+                ).pack(side="right", padx=4)
+
+    def _pick_color(self, key):
+        current = self.config.get(key, self.DEFAULTS[key])
+        result = self.colorchooser.askcolor(color=current, parent=self.win,
+                                            title=self.LABELS[key])
+        if result and result[1]:
+            self.config[key] = result[1]
+            # ボタン全体を再描画
+            self.win.destroy()
+            DesignEditor(self.app)
+
+    def _reset(self):
+        if messagebox.askyesno("確認", "すべての色をデフォルトに戻しますか？"):
+            self.config = dict(self.DEFAULTS)
+            self.win.destroy()
+            DesignEditor(self.app)
+
+    def _on_save(self):
+        try:
+            self._save()
+            messagebox.showinfo("保存完了",
+                f"デザイン設定を保存しました\n"
+                f"次のPDF生成から反映されます\n\n{self.config_path}")
+            self.win.destroy()
+        except Exception as e:
+            messagebox.showerror("エラー", f"保存失敗: {e}")
 
 
 # ════════════════════════════════════════════════════════
