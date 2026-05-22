@@ -1443,16 +1443,19 @@ class CropAdjusterApp:
 
         # 進捗ダイアログを開く
         output_dir = os.path.join(self.base, "output")
-        dlg = ProgressDialog(self.root, title="ポスター生成中...", output_dir=output_dir)
+        dlg = ProgressDialog(self.root, title="ポスター生成中...",
+                            output_dir=output_dir, app=self)
         self.root.update()  # ダイアログが描画されるまで待つ
 
         def worker():
             try:
-                cmd = [sys.executable, script, "--base", self.base,
+                # -u を入れて子プロセスのstdoutバッファを無効化（リアルタイムログ取得のため）
+                cmd = [sys.executable, "-u", script, "--base", self.base,
                        "--out", os.path.join(self.base, "output")] + extra_args
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT,
-                                       text=True, bufsize=1, encoding='utf-8')
+                                       text=True, bufsize=1, encoding='utf-8',
+                                       env={**os.environ, "PYTHONUNBUFFERED": "1"})
                 # 進捗推定: ▶マークを数えて分数で % を出す
                 total_classes = len(self.classes_list) or 19
                 done = 0
@@ -2137,11 +2140,20 @@ class DesignEditor:
 #  進捗ダイアログ
 # ════════════════════════════════════════════════════════
 class ProgressDialog:
-    def __init__(self, parent, title="生成中...", output_dir=None):
+    def __init__(self, parent, title="生成中...", output_dir=None, app=None):
         self.win = tk.Toplevel(parent)
         self.win.title(title)
         self.win.transient(parent)
         self.output_dir = output_dir
+        self.app = app
+        if self.app and hasattr(self.app, "_modal_open"):
+            self.app._modal_open()
+            self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        if self.app and hasattr(self.app, "_modal_close"):
+            self.app._modal_close()
+        self.win.destroy()
         sw = self.win.winfo_screenwidth()
         sh = self.win.winfo_screenheight()
         ww, wh = 640, 420
@@ -2191,7 +2203,7 @@ class ProgressDialog:
         # ボタンエリア
         btn_frame = tk.Frame(self.win, bg=PALETTE["bg"])
         btn_frame.pack(fill="x", padx=20, pady=(0,16))
-        self.close_btn = MacButton(btn_frame, "実行中...", self.win.destroy,
+        self.close_btn = MacButton(btn_frame, "実行中...", self._on_close,
                                   bg=PALETTE["neutral"], fg=PALETTE["text_dim"],
                                   font=(system_font_family(), 12), padx=20, pady=8)
         self.close_btn.pack(side="right")
@@ -2276,7 +2288,13 @@ class PosterWizard:
 
         self.step = 0
         self.steps = ["mode", "layout", "teacher", "confirm"]
+        self.app._modal_open()
         self._build()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        self.app._modal_close()
+        self.root.destroy()
 
     def _build(self):
         # ヘッダー
@@ -2560,7 +2578,7 @@ class PosterWizard:
             self._execute()
 
     def _cancel(self):
-        self.root.destroy()
+        self._on_close()
 
     def _execute(self):
         """設定でポスター生成スクリプトを呼ぶ"""
@@ -2569,6 +2587,8 @@ class PosterWizard:
             args += ["--cols", str(self.v_cols.get()), "--rows", str(self.v_rows.get())]
         if self.v_use_teacher.get() and self.teachers_path:
             args += ["--teachers", self.teachers_path]
+        # ウィザードを閉じてからPDF生成（進捗ダイアログが新たにmodalを取る）
+        self.app._modal_close()
         self.root.destroy()
         self.app._run_poster(args, "  ⏳ ウィザードの設定でポスター生成中...")
 
