@@ -36,10 +36,31 @@ IS_MAC = platform.system() == "Darwin"
 #  共通: フォント・EXIF・顔検出
 # ════════════════════════════════════════════════════════
 FONT_CANDIDATES = [
+    # ── macOS ヒラギノ系 ──
     "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
     "/System/Library/Fonts/Hiragino Sans W3.ttc",
     "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
     "/Library/Fonts/UDDigiKyokashoProN-Regular.otf",
+    # ── Windows: UDデジタル教科書体（最優先）──
+    # Win10/11 標準パッケージ（2ファイルにN/NK/NP全スタイル収録）
+    "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc",     # Regular → 名前表示はこれが最適
+    "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc",     # Bold
+    # 旧バージョン・個別ファイルが残っている環境用
+    "C:/Windows/Fonts/UDDigiKyokashoNP-R.ttc",
+    "C:/Windows/Fonts/UDDigiKyokashoNK-R.ttc",
+    "C:/Windows/Fonts/UDDigiKyokashoNP-B.ttc",
+    "C:/Windows/Fonts/UDDigiKyokashoNK-B.ttc",
+    # Win11で個別.ttfになるパターン
+    "C:/Windows/Fonts/UDDigiKyokashoN-R-01.ttf",
+    "C:/Windows/Fonts/UDDigiKyokashoNP-R-02.ttf",
+    "C:/Windows/Fonts/UDDigiKyokashoNK-R-03.ttf",
+    # ── Windows: フォールバック（UD教科書体がない環境）──
+    "C:/Windows/Fonts/meiryo.ttc",                # メイリオ（Vista以降、読みやすい）
+    "C:/Windows/Fonts/MeiryoUI.ttc",              # メイリオUI
+    "C:/Windows/Fonts/YuGothR.ttc",               # 游ゴシックR（Win8.1以降）
+    "C:/Windows/Fonts/YuGothM.ttc",               # 游ゴシックM
+    "C:/Windows/Fonts/msgothic.ttc",              # MSゴシック（全Windows共通）
+    # ── Linux フォールバック ──
     "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
 ]
 _fp = None
