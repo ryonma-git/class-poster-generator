@@ -1,9 +1,8 @@
 name: Build App (Mac + Windows)
 
-# stable ブランチへの push、または手動実行でビルドが走る
+# 手動実行のみ（GitHub の Actions タブから "Run workflow" ボタンで起動）
+# stable ブランチへの自動ビルドはしない→動作確認済みのときだけ手動で実行
 on:
-  push:
-    branches: [stable]
   workflow_dispatch:
 
 jobs:
