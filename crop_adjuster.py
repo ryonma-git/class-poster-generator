@@ -1451,16 +1451,31 @@ class CropAdjusterApp:
         # if hasattr(self, 'v_global_top'): ...
         # if hasattr(self, 'v_global_left'): ...
 
-        candidates = [
-            os.path.join(self.base, "make_poster.py"),
-            os.path.join(self.base, "make_poster_v8.py"),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster.py"),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster_v8.py"),
-        ]
-        script = next((p for p in candidates if os.path.exists(p)), None)
-        if not script:
-            messagebox.showerror("エラー", "make_poster.py が見つかりません。")
-            return
+        # ── コマンド構築（スクリプト版 と PyInstaller版 の両対応）──
+        if getattr(sys, 'frozen', False):
+            # PyInstaller で固めた .app / .exe の場合
+            # make_poster 実行ファイルは自分と同じフォルダに同梱されている
+            exe_dir = os.path.dirname(sys.executable)
+            exe_name = "make_poster.exe" if sys.platform == "win32" else "make_poster"
+            make_poster_bin = os.path.join(exe_dir, exe_name)
+            if not os.path.exists(make_poster_bin):
+                messagebox.showerror("エラー",
+                    f"make_poster が見つかりません。\n{make_poster_bin}")
+                return
+            base_cmd = [make_poster_bin]
+        else:
+            # 通常のスクリプト実行（開発時 / deploy.sh 経由）
+            candidates = [
+                os.path.join(self.base, "make_poster.py"),
+                os.path.join(self.base, "make_poster_v8.py"),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster.py"),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster_v8.py"),
+            ]
+            script = next((p for p in candidates if os.path.exists(p)), None)
+            if not script:
+                messagebox.showerror("エラー", "make_poster.py が見つかりません。")
+                return
+            base_cmd = [sys.executable, "-u", script]
 
         # 進捗ダイアログを開く
         output_dir = os.path.join(self.base, "output")
@@ -1470,8 +1485,7 @@ class CropAdjusterApp:
 
         def worker():
             try:
-                # -u を入れて子プロセスのstdoutバッファを無効化（リアルタイムログ取得のため）
-                cmd = [sys.executable, "-u", script, "--base", self.base,
+                cmd = base_cmd + ["--base", self.base,
                        "--out", os.path.join(self.base, "output")] + extra_args
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT,
