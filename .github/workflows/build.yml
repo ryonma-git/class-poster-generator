@@ -1,11 +1,69 @@
-name: Build Windows .exe
+name: Build App (Mac + Windows)
 
 # 手動実行のみ（GitHub の Actions タブから "Run workflow" ボタンで起動）
-# Mac .app はローカルMacで build_mac.sh を実行してビルドする
 on:
   workflow_dispatch:
 
 jobs:
+  # ══════════════════════════════════════════
+  #  macOS → .app ビルド
+  # ══════════════════════════════════════════
+  build-macos:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: ライブラリのインストール
+        run: |
+          pip install \
+            Pillow opencv-python numpy pandas openpyxl \
+            reportlab "pillow-heif" "xlrd==1.2.0" customtkinter \
+            pyinstaller
+
+      - name: make_poster をビルド（サブプロセス用）
+        run: |
+          pyinstaller \
+            --onefile \
+            --name make_poster \
+            --hidden-import cv2 \
+            --hidden-import pillow_heif \
+            --hidden-import pandas \
+            --hidden-import openpyxl \
+            --hidden-import xlrd \
+            make_poster.py
+
+      - name: crop_adjuster をビルド（メインアプリ）
+        run: |
+          pyinstaller \
+            --windowed \
+            --name "CropAdjuster" \
+            --collect-all customtkinter \
+            --hidden-import PIL._tkinter_finder \
+            --hidden-import cv2 \
+            --hidden-import pillow_heif \
+            --hidden-import pandas \
+            --hidden-import openpyxl \
+            --hidden-import xlrd \
+            crop_adjuster.py
+
+      - name: make_poster を .app に同梱
+        run: |
+          cp dist/make_poster "dist/CropAdjuster.app/Contents/MacOS/make_poster"
+
+      - name: .app を zip にまとめる
+        run: |
+          cd dist && zip -r "クロップ調整ツール-Mac.zip" "CropAdjuster.app"
+
+      - name: アーティファクトとして保存
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: dist/クロップ調整ツール-Mac.zip
+
   # ══════════════════════════════════════════
   #  Windows → .exe ビルド
   # ══════════════════════════════════════════
@@ -69,7 +127,7 @@ jobs:
   #  完成したら GitHub Release を作成
   # ══════════════════════════════════════════
   release:
-    needs: build-windows
+    needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,12 +143,12 @@ jobs:
           TAG="build-${{ github.run_number }}"
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
-            --title "Windows版 ビルド #${{ github.run_number }}" \
+            --title "ビルド #${{ github.run_number }}" \
             --notes "## ダウンロード・使い方
-          1. クロップ調整ツール-Win.zip をダウンロード
-          2. zip を解凍
-          3. CropAdjuster.exe をダブルクリックで起動
+          - **Mac用**: クロップ調整ツール-Mac.zip を解凍 → CropAdjuster.app をダブルクリック
+          - **Win用**: クロップ調整ツール-Win.zip を解凍 → CropAdjuster.exe をダブルクリック
 
           ビルド番号: #${{ github.run_number }}
           コミット: ${{ github.sha }}" \
+            "artifacts/mac-build/クロップ調整ツール-Mac.zip" \
             "artifacts/win-build/クロップ調整ツール-Win.zip"
