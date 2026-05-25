@@ -36,31 +36,10 @@ IS_MAC = platform.system() == "Darwin"
 #  共通: フォント・EXIF・顔検出
 # ════════════════════════════════════════════════════════
 FONT_CANDIDATES = [
-    # ── macOS ヒラギノ系 ──
     "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
     "/System/Library/Fonts/Hiragino Sans W3.ttc",
     "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
     "/Library/Fonts/UDDigiKyokashoProN-Regular.otf",
-    # ── Windows: UDデジタル教科書体（最優先）──
-    # Win10/11 標準パッケージ（2ファイルにN/NK/NP全スタイル収録）
-    "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc",     # Regular → 名前表示はこれが最適
-    "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc",     # Bold
-    # 旧バージョン・個別ファイルが残っている環境用
-    "C:/Windows/Fonts/UDDigiKyokashoNP-R.ttc",
-    "C:/Windows/Fonts/UDDigiKyokashoNK-R.ttc",
-    "C:/Windows/Fonts/UDDigiKyokashoNP-B.ttc",
-    "C:/Windows/Fonts/UDDigiKyokashoNK-B.ttc",
-    # Win11で個別.ttfになるパターン
-    "C:/Windows/Fonts/UDDigiKyokashoN-R-01.ttf",
-    "C:/Windows/Fonts/UDDigiKyokashoNP-R-02.ttf",
-    "C:/Windows/Fonts/UDDigiKyokashoNK-R-03.ttf",
-    # ── Windows: フォールバック（UD教科書体がない環境）──
-    "C:/Windows/Fonts/meiryo.ttc",                # メイリオ（Vista以降、読みやすい）
-    "C:/Windows/Fonts/MeiryoUI.ttc",              # メイリオUI
-    "C:/Windows/Fonts/YuGothR.ttc",               # 游ゴシックR（Win8.1以降）
-    "C:/Windows/Fonts/YuGothM.ttc",               # 游ゴシックM
-    "C:/Windows/Fonts/msgothic.ttc",              # MSゴシック（全Windows共通）
-    # ── Linux フォールバック ──
     "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
 ]
 _fp = None
@@ -664,15 +643,6 @@ class CropAdjusterApp:
             self._main_scroll.pack(fill="both", expand=True, padx=14, pady=12)
             main = tk.Frame(self._main_scroll, bg=BG)
             main.pack(fill="both", expand=True)
-            # CTkScrollableFrame + grid の幅問題を修正:
-            # 内部Canvasのリサイズに合わせて main の幅を強制更新する
-            def _resize_main_to_canvas(e, _m=main):
-                _m.configure(width=e.width)
-            try:
-                self._main_scroll._parent_canvas.bind(
-                    '<Configure>', _resize_main_to_canvas, add='+')
-            except AttributeError:
-                pass
         else:
             main = tk.Frame(root, bg=BG)
             main.pack(fill="both", expand=True, padx=14, pady=12)
@@ -680,10 +650,7 @@ class CropAdjusterApp:
         # 3列レイアウト（grid）
         main.grid_rowconfigure(0, weight=1)
         main.grid_columnconfigure(0, weight=0, minsize=200)
-        # minsize をピクセルで指定して中央列が潰れないようにする
-        # （prev_label の width を文字単位で指定すると 3000px 超になるため省略し
-        #   ここで確保する）
-        main.grid_columnconfigure(1, weight=1, minsize=self.PREVIEW_W + 60)
+        main.grid_columnconfigure(1, weight=1)
         main.grid_columnconfigure(2, weight=0, minsize=290)
 
         # ─ 左: クラス一覧 ─
@@ -729,10 +696,9 @@ class CropAdjusterApp:
         tk.Label(inner, text="✋ 枠の中=移動  ●角=ズーム",
                  bg=PANEL, fg=DIM, font=self._font(10)
                 ).pack(pady=(0,6))
-        # width/height をここで指定すると「文字単位」になり3000px超になるため省略。
-        # 代わりに column 1 の minsize で列幅を確保し、
-        # _update_preview() でイメージセット時にピクセル単位で設定される。
-        self.prev_label = tk.Label(inner, bg=PALETTE["panel_alt"], cursor="fleur")
+        self.prev_label = tk.Label(inner, bg=PALETTE["panel_alt"],
+                                   width=self.PREVIEW_W, height=self.PREVIEW_H,
+                                   cursor="fleur")
         self.prev_label.pack()
         self.prev_label.bind("<Button-1>", self._on_drag_start)
         self.prev_label.bind("<B1-Motion>", self._on_drag_motion)
@@ -1464,31 +1430,16 @@ class CropAdjusterApp:
         # if hasattr(self, 'v_global_top'): ...
         # if hasattr(self, 'v_global_left'): ...
 
-        # ── コマンド構築（スクリプト版 と PyInstaller版 の両対応）──
-        if getattr(sys, 'frozen', False):
-            # PyInstaller で固めた .app / .exe の場合
-            # make_poster 実行ファイルは自分と同じフォルダに同梱されている
-            exe_dir = os.path.dirname(sys.executable)
-            exe_name = "make_poster.exe" if sys.platform == "win32" else "make_poster"
-            make_poster_bin = os.path.join(exe_dir, exe_name)
-            if not os.path.exists(make_poster_bin):
-                messagebox.showerror("エラー",
-                    f"make_poster が見つかりません。\n{make_poster_bin}")
-                return
-            base_cmd = [make_poster_bin]
-        else:
-            # 通常のスクリプト実行（開発時 / deploy.sh 経由）
-            candidates = [
-                os.path.join(self.base, "make_poster.py"),
-                os.path.join(self.base, "make_poster_v8.py"),
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster.py"),
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster_v8.py"),
-            ]
-            script = next((p for p in candidates if os.path.exists(p)), None)
-            if not script:
-                messagebox.showerror("エラー", "make_poster.py が見つかりません。")
-                return
-            base_cmd = [sys.executable, "-u", script]
+        candidates = [
+            os.path.join(self.base, "make_poster.py"),
+            os.path.join(self.base, "make_poster_v8.py"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster.py"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_poster_v8.py"),
+        ]
+        script = next((p for p in candidates if os.path.exists(p)), None)
+        if not script:
+            messagebox.showerror("エラー", "make_poster.py が見つかりません。")
+            return
 
         # 進捗ダイアログを開く
         output_dir = os.path.join(self.base, "output")
@@ -1498,7 +1449,8 @@ class CropAdjusterApp:
 
         def worker():
             try:
-                cmd = base_cmd + ["--base", self.base,
+                # -u を入れて子プロセスのstdoutバッファを無効化（リアルタイムログ取得のため）
+                cmd = [sys.executable, "-u", script, "--base", self.base,
                        "--out", os.path.join(self.base, "output")] + extra_args
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT,
@@ -2641,58 +2593,14 @@ class PosterWizard:
         self.app._run_poster(args, "  ⏳ ウィザードの設定でポスター生成中...")
 
 # ════════════════════════════════════════════════════════
-def _last_base_path():
-    """前回使った写真フォルダのパスを保存・読み込みするファイル"""
-    if getattr(sys, 'frozen', False):
-        # .app 内部ではなくユーザーのホームに保存
-        config_dir = os.path.join(os.path.expanduser("~"), ".crop_adjuster")
-    else:
-        config_dir = os.path.dirname(os.path.abspath(__file__))
-    os.makedirs(config_dir, exist_ok=True)
-    return os.path.join(config_dir, "last_base.txt")
-
-def _load_last_base():
-    p = _last_base_path()
-    if os.path.exists(p):
-        with open(p, encoding="utf-8") as f:
-            val = f.read().strip()
-            if os.path.isdir(val):
-                return val
-    return None
-
-def _save_last_base(base):
-    with open(_last_base_path(), "w", encoding="utf-8") as f:
-        f.write(base)
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default=None,
-                    help="写真フォルダのパス（省略時はダイアログで選択）")
+    ap.add_argument("--base", required=True)
     ap.add_argument("--overrides", default=None)
     args = ap.parse_args()
-
-    base = args.base
-
-    # --base 未指定（.appダブルクリック起動など）→ フォルダ選択ダイアログ
-    if not base or not os.path.isdir(base):
-        # 小さなダミーウィンドウを出してからダイアログを開く（macOS対策）
-        tmp = tk.Tk()
-        tmp.withdraw()
-        last = _load_last_base()
-        from tkinter import filedialog
-        base = filedialog.askdirectory(
-            title="クラス個人写真フォルダを選択してください",
-            initialdir=last or os.path.expanduser("~")
-        )
-        tmp.destroy()
-        if not base:
-            # キャンセルされたら終了
-            return
-
-    _save_last_base(base)
-    override_path = args.overrides or os.path.join(base, "crop_check", "crop_overrides.csv")
+    override_path = args.overrides or os.path.join(args.base, "crop_check", "crop_overrides.csv")
     root = tk.Tk()
-    app = CropAdjusterApp(root, base, override_path)
+    app = CropAdjusterApp(root, args.base, override_path)
     root.mainloop()
 
 if __name__ == "__main__":
