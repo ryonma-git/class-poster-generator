@@ -74,23 +74,38 @@ def fix_exif(img):
 #  顔検出
 # ════════════════════════════════════════════════════════
 _cascade = None
+_cascade_ok = None   # None=未確認 / True=正常 / False=利用不可
 def detect_face(pil_img):
-    global _cascade
-    if _cascade is None:
-        _cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    w, h = pil_img.size
-    rgb  = np.array(pil_img.convert("RGB"))
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    min_f = max(20, int(min(w, h) * 0.05))
-    for g in [gray, cv2.equalizeHist(gray)]:
-        for scale in [1.05, 1.08, 1.12, 1.15]:
-            for nb in [3, 4, 5]:
-                faces = _cascade.detectMultiScale(
-                    g, scaleFactor=scale, minNeighbors=nb,
-                    minSize=(min_f, min_f))
-                if len(faces) > 0:
-                    return sorted(faces, key=lambda f:f[2]*f[3], reverse=True)[0]
+    """顔検出。cascade XML が見つからない場合は None を返してフォールバック。"""
+    global _cascade, _cascade_ok
+    if _cascade_ok is None:
+        try:
+            path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            clf = cv2.CascadeClassifier(path)
+            if clf.empty():
+                _cascade_ok = False   # XML が存在しない / 読み込み失敗
+            else:
+                _cascade = clf
+                _cascade_ok = True
+        except Exception:
+            _cascade_ok = False
+    if not _cascade_ok:
+        return None   # 顔検出なし → auto_initial_crop_params がデフォルト値を使う
+    try:
+        w, h = pil_img.size
+        rgb  = np.array(pil_img.convert("RGB"))
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        min_f = max(20, int(min(w, h) * 0.05))
+        for g in [gray, cv2.equalizeHist(gray)]:
+            for scale in [1.05, 1.08, 1.12, 1.15]:
+                for nb in [3, 4, 5]:
+                    faces = _cascade.detectMultiScale(
+                        g, scaleFactor=scale, minNeighbors=nb,
+                        minSize=(min_f, min_f))
+                    if len(faces) > 0:
+                        return sorted(faces, key=lambda f:f[2]*f[3], reverse=True)[0]
+    except Exception:
+        pass
     return None
 
 # ════════════════════════════════════════════════════════

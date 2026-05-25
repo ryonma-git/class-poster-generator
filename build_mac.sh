@@ -54,16 +54,21 @@ echo "  make_poster をビルド中..."
     make_poster.py
 
 echo "  crop_adjuster をビルド中（時間がかかります）..."
+# cv2 の Haar cascade XML（顔検出用）のパスを取得してバンドルに含める
+HAARCASCADE_XML=$("$PY" -c "import cv2, os; print(os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml'))")
+echo "  Haar cascade XML: $HAARCASCADE_XML"
 "$PY" -m PyInstaller \
     --windowed \
     --name "CropAdjuster" \
     --collect-all customtkinter \
     --hidden-import PIL._tkinter_finder \
     --hidden-import cv2 \
+    --collect-data cv2 \
     --hidden-import pillow_heif \
     --hidden-import pandas \
     --hidden-import openpyxl \
     --hidden-import xlrd \
+    --add-data "${HAARCASCADE_XML}:cv2/data" \
     crop_adjuster.py
 
 # make_poster を .app に同梱

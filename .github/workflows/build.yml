@@ -38,16 +38,20 @@ jobs:
 
       - name: crop_adjuster をビルド（メインアプリ）
         run: |
+          CASCADE_XML=$(python -c "import cv2,os; print(os.path.join(cv2.data.haarcascades,'haarcascade_frontalface_default.xml'))")
+          echo "Haar cascade XML: $CASCADE_XML"
           pyinstaller \
             --windowed \
             --name "CropAdjuster" \
             --collect-all customtkinter \
             --hidden-import PIL._tkinter_finder \
             --hidden-import cv2 \
+            --collect-data cv2 \
             --hidden-import pillow_heif \
             --hidden-import pandas \
             --hidden-import openpyxl \
             --hidden-import xlrd \
+            --add-data "${CASCADE_XML}:cv2/data" \
             crop_adjuster.py
 
       - name: make_poster を .app に同梱
@@ -97,16 +101,20 @@ jobs:
 
       - name: crop_adjuster をビルド（メインアプリ）
         run: |
+          $CASCADE_XML = python -c "import cv2,os; print(os.path.join(cv2.data.haarcascades,'haarcascade_frontalface_default.xml').replace('\', '/'))"
+          Write-Host "Haar cascade XML: $CASCADE_XML"
           pyinstaller `
             --windowed `
             --name CropAdjuster `
             --collect-all customtkinter `
             --hidden-import PIL._tkinter_finder `
             --hidden-import cv2 `
+            --collect-data cv2 `
             --hidden-import pillow_heif `
             --hidden-import pandas `
             --hidden-import openpyxl `
             --hidden-import xlrd `
+            "--add-data=${CASCADE_XML};cv2/data" `
             crop_adjuster.py
 
       - name: make_poster.exe を CropAdjuster フォルダに同梱
