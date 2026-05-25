@@ -101,8 +101,6 @@ jobs:
 
       - name: crop_adjuster をビルド（メインアプリ）
         run: |
-          $CASCADE_XML = python -c "import cv2,os; print(os.path.join(cv2.data.haarcascades,'haarcascade_frontalface_default.xml').replace('\', '/'))"
-          Write-Host "Haar cascade XML: $CASCADE_XML"
           pyinstaller `
             --windowed `
             --name CropAdjuster `
@@ -114,7 +112,6 @@ jobs:
             --hidden-import pandas `
             --hidden-import openpyxl `
             --hidden-import xlrd `
-            "--add-data=${CASCADE_XML};cv2/data" `
             crop_adjuster.py
 
       - name: make_poster.exe を CropAdjuster フォルダに同梱
