@@ -2628,14 +2628,58 @@ class PosterWizard:
         self.app._run_poster(args, "  ⏳ ウィザードの設定でポスター生成中...")
 
 # ════════════════════════════════════════════════════════
+def _last_base_path():
+    """前回使った写真フォルダのパスを保存・読み込みするファイル"""
+    if getattr(sys, 'frozen', False):
+        # .app 内部ではなくユーザーのホームに保存
+        config_dir = os.path.join(os.path.expanduser("~"), ".crop_adjuster")
+    else:
+        config_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(config_dir, exist_ok=True)
+    return os.path.join(config_dir, "last_base.txt")
+
+def _load_last_base():
+    p = _last_base_path()
+    if os.path.exists(p):
+        with open(p, encoding="utf-8") as f:
+            val = f.read().strip()
+            if os.path.isdir(val):
+                return val
+    return None
+
+def _save_last_base(base):
+    with open(_last_base_path(), "w", encoding="utf-8") as f:
+        f.write(base)
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", required=True)
+    ap.add_argument("--base", default=None,
+                    help="写真フォルダのパス（省略時はダイアログで選択）")
     ap.add_argument("--overrides", default=None)
     args = ap.parse_args()
-    override_path = args.overrides or os.path.join(args.base, "crop_check", "crop_overrides.csv")
+
+    base = args.base
+
+    # --base 未指定（.appダブルクリック起動など）→ フォルダ選択ダイアログ
+    if not base or not os.path.isdir(base):
+        # 小さなダミーウィンドウを出してからダイアログを開く（macOS対策）
+        tmp = tk.Tk()
+        tmp.withdraw()
+        last = _load_last_base()
+        from tkinter import filedialog
+        base = filedialog.askdirectory(
+            title="クラス個人写真フォルダを選択してください",
+            initialdir=last or os.path.expanduser("~")
+        )
+        tmp.destroy()
+        if not base:
+            # キャンセルされたら終了
+            return
+
+    _save_last_base(base)
+    override_path = args.overrides or os.path.join(base, "crop_check", "crop_overrides.csv")
     root = tk.Tk()
-    app = CropAdjusterApp(root, args.base, override_path)
+    app = CropAdjusterApp(root, base, override_path)
     root.mainloop()
 
 if __name__ == "__main__":
