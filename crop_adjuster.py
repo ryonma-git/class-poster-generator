@@ -664,6 +664,15 @@ class CropAdjusterApp:
             self._main_scroll.pack(fill="both", expand=True, padx=14, pady=12)
             main = tk.Frame(self._main_scroll, bg=BG)
             main.pack(fill="both", expand=True)
+            # CTkScrollableFrame + grid の幅問題を修正:
+            # 内部Canvasのリサイズに合わせて main の幅を強制更新する
+            def _resize_main_to_canvas(e, _m=main):
+                _m.configure(width=e.width)
+            try:
+                self._main_scroll._parent_canvas.bind(
+                    '<Configure>', _resize_main_to_canvas, add='+')
+            except AttributeError:
+                pass
         else:
             main = tk.Frame(root, bg=BG)
             main.pack(fill="both", expand=True, padx=14, pady=12)
@@ -671,7 +680,10 @@ class CropAdjusterApp:
         # 3列レイアウト（grid）
         main.grid_rowconfigure(0, weight=1)
         main.grid_columnconfigure(0, weight=0, minsize=200)
-        main.grid_columnconfigure(1, weight=1)
+        # minsize をピクセルで指定して中央列が潰れないようにする
+        # （prev_label の width を文字単位で指定すると 3000px 超になるため省略し
+        #   ここで確保する）
+        main.grid_columnconfigure(1, weight=1, minsize=self.PREVIEW_W + 60)
         main.grid_columnconfigure(2, weight=0, minsize=290)
 
         # ─ 左: クラス一覧 ─
@@ -717,9 +729,10 @@ class CropAdjusterApp:
         tk.Label(inner, text="✋ 枠の中=移動  ●角=ズーム",
                  bg=PANEL, fg=DIM, font=self._font(10)
                 ).pack(pady=(0,6))
-        self.prev_label = tk.Label(inner, bg=PALETTE["panel_alt"],
-                                   width=self.PREVIEW_W, height=self.PREVIEW_H,
-                                   cursor="fleur")
+        # width/height をここで指定すると「文字単位」になり3000px超になるため省略。
+        # 代わりに column 1 の minsize で列幅を確保し、
+        # _update_preview() でイメージセット時にピクセル単位で設定される。
+        self.prev_label = tk.Label(inner, bg=PALETTE["panel_alt"], cursor="fleur")
         self.prev_label.pack()
         self.prev_label.bind("<Button-1>", self._on_drag_start)
         self.prev_label.bind("<B1-Motion>", self._on_drag_motion)
