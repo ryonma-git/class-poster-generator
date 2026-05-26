@@ -60,13 +60,13 @@ jobs:
 
       - name: .app を zip にまとめる
         run: |
-          cd dist && zip -r "クロップ調整ツール-Mac.zip" "CropAdjuster.app"
+          cd dist && zip -r "CropAdjuster-Mac.zip" "CropAdjuster.app"
 
       - name: アーティファクトとして保存
         uses: actions/upload-artifact@v4
         with:
           name: mac-build
-          path: dist/クロップ調整ツール-Mac.zip
+          path: dist/CropAdjuster-Mac.zip
 
   # ══════════════════════════════════════════
   #  Windows → .exe ビルド
@@ -120,13 +120,13 @@ jobs:
 
       - name: フォルダを zip にまとめる
         run: |
-          Compress-Archive -Path dist\CropAdjuster -DestinationPath クロップ調整ツール-Win.zip
+          Compress-Archive -Path dist\CropAdjuster -DestinationPath CropAdjuster-Win.zip
 
       - name: アーティファクトとして保存
         uses: actions/upload-artifact@v4
         with:
           name: win-build
-          path: クロップ調整ツール-Win.zip
+          path: CropAdjuster-Win.zip
 
   # ══════════════════════════════════════════
   #  完成したら GitHub Release を作成
@@ -150,10 +150,10 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "ビルド #${{ github.run_number }}" \
             --notes "## ダウンロード・使い方
-          - **Mac用**: クロップ調整ツール-Mac.zip を解凍 → CropAdjuster.app をダブルクリック
-          - **Win用**: クロップ調整ツール-Win.zip を解凍 → CropAdjuster.exe をダブルクリック
+          - **Mac用**: CropAdjuster-Mac.zip を解凍 → CropAdjuster.app をダブルクリック
+          - **Win用**: CropAdjuster-Win.zip を解凍 → CropAdjuster.exe をダブルクリック
 
           ビルド番号: #${{ github.run_number }}
           コミット: ${{ github.sha }}" \
-            "artifacts/mac-build/クロップ調整ツール-Mac.zip" \
-            "artifacts/win-build/クロップ調整ツール-Win.zip"
+            "artifacts/mac-build/CropAdjuster-Mac.zip" \
+            "artifacts/win-build/CropAdjuster-Win.zip"
