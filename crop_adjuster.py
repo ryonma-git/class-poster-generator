@@ -276,6 +276,50 @@ def render_poster_cell(cropped_img, num, name, cell_w=240):
     ImageDraw.Draw(cell).line([(0,photo_h),(cell_w,photo_h)], fill=C_ACCENT+(220,), width=3)
     return cell
 
+# ── 個別IDカード画像（顔写真＋学年組番号＋漢字名＋ふりがな）──
+def render_id_card(cropped_img, grade, cls, num, kanji, kana, card_w=640):
+    """1人分の顔写真カードを生成。行方不明児童の捜索などに使う。
+    cropped_img は実写真からクロップ済みの高解像度画像を渡す。"""
+    margin = int(card_w * 0.04)
+    photo_w = card_w - margin * 2
+    photo_h = int(photo_w / CELL_ASPECT)
+    info_h = int(card_w * 0.30)
+    card_h = margin + photo_h + info_h + margin
+    # 背景（白カード＋薄い枠）
+    card = Image.new("RGB", (card_w, card_h), (255, 255, 255))
+    cd = ImageDraw.Draw(card)
+    cd.rectangle([0, 0, card_w-1, card_h-1], outline=(210, 216, 226), width=2)
+    # 顔写真
+    photo = cropped_img.resize((photo_w, photo_h), Image.LANCZOS).convert("RGB")
+    card.paste(photo, (margin, margin))
+    cd.rectangle([margin, margin, margin+photo_w-1, margin+photo_h-1],
+                 outline=(180, 188, 200), width=1)
+    # 情報エリア
+    ix = margin
+    iy = margin + photo_h + int(info_h * 0.10)
+    # 学年組番号（アクセント色）
+    f_meta = get_pil_font(int(info_h * 0.26))
+    meta = f"{grade}年 {cls}組  {num}番"
+    cd.text((ix, iy), meta, font=f_meta, fill=C_LBL_BG)
+    # ふりがな（小）
+    iy2 = iy + int(info_h * 0.30)
+    if kana:
+        f_kana = get_pil_font(int(info_h * 0.20))
+        cd.text((ix, iy2), kana, font=f_kana, fill=(110, 120, 135))
+    # 漢字名（大）
+    iy3 = iy2 + int(info_h * 0.22)
+    kanji_disp = kanji or f"{num}番"
+    f_name = get_pil_font(int(info_h * 0.34))
+    # はみ出すなら縮小
+    avail = card_w - margin * 2
+    while True:
+        bb = cd.textbbox((0, 0), kanji_disp, font=f_name)
+        if bb[2]-bb[0] <= avail or f_name.size <= 16:
+            break
+        f_name = get_pil_font(f_name.size - 2)
+    cd.text((ix, iy3), kanji_disp, font=f_name, fill=(30, 36, 46))
+    return card
+
 # ── クラス全員サムネ ──
 def render_class_overview(class_items, current_num=None, max_w=560, thumb_w=110):
     if not class_items:
@@ -419,6 +463,38 @@ def load_master_roster(path):
         result.setdefault((row["学年"], row["組"]), {})[row["番号"]] = row["氏名"]
     return result
 
+def load_full_roster(path):
+    """漢字名・ふりがな両方を読み込む（検索・画像出力用）。
+    戻り値: {(学年,組): {番号: {"kanji": 漢字名, "kana": ふりがな}}}
+    col16=名前(漢字), col17=ふりがな"""
+    import pandas as pd
+    try:
+        ext = Path(path).suffix.lower()
+        if ext == '.xls':
+            import xlrd
+            wb = xlrd.open_workbook(path)
+            ws = wb.sheet_by_index(0)
+            rows = [ws.row_values(i) for i in range(ws.nrows)]
+            df = pd.DataFrame(rows[1:], columns=rows[0])
+        else:
+            df = pd.read_excel(path, header=0)
+        sub = df.iloc[:, [2, 3, 4, 16, 17]].copy()
+        sub.columns = ["学年", "組", "番号", "漢字", "かな"]
+        sub = sub.dropna(subset=["学年", "組", "番号"])
+        sub["学年"] = sub["学年"].astype(int)
+        sub["組"] = sub["組"].astype(int)
+        sub["番号"] = sub["番号"].astype(int)
+        # 全角スペースを半角に統一して見やすく
+        sub["漢字"] = sub["漢字"].fillna("").astype(str).str.strip().str.replace("　", " ")
+        sub["かな"] = sub["かな"].fillna("").astype(str).str.strip().str.replace("　", " ")
+        result = {}
+        for _, row in sub.iterrows():
+            result.setdefault((row["学年"], row["組"]), {})[row["番号"]] = {
+                "kanji": row["漢字"], "kana": row["かな"]}
+        return result
+    except Exception:
+        return {}
+
 def find_roster_file(base):
     candidates = [f for f in
         glob.glob(os.path.join(base, "*.xls")) +
@@ -535,6 +611,7 @@ class CropAdjusterApp:
         self.classes_list  = find_all_classes(base)
         self.roster_path   = find_roster_file(base)
         self.roster_data   = load_master_roster(self.roster_path) if self.roster_path else {}
+        self.roster_full   = load_full_roster(self.roster_path) if self.roster_path else {}
 
         self.current_img      = None   # 編集用プロキシ（縮小画像）
         self.current_key      = None
@@ -849,6 +926,16 @@ class CropAdjusterApp:
                 ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "全クラスPDF再生成", self.regen_all,
+                 bg=PALETTE["accent"], fg="#ffffff",
+                 font=self._font(11, True), padx=10, pady=10
+                ).pack(fill="x", padx=14, pady=4)
+
+        # ─ 顔写真の画像出力 ─
+        tk.Label(right, text="顔写真の画像出力", bg=PANEL, fg=DIM,
+                 font=self._font(10, True), anchor="w"
+                ).pack(fill="x", padx=14, pady=(18,4))
+
+        MacButton(right, "📸 この生徒の写真を出力", self.export_current_student,
                  bg=PALETTE["accent"], fg="#ffffff",
                  font=self._font(11, True), padx=10, pady=10
                 ).pack(fill="x", padx=14, pady=4)
@@ -1313,6 +1400,66 @@ class CropAdjusterApp:
         if self.v_auto_pdf.get():
             self.regen_current_class()
         self.next_photo()
+
+    # ── 顔写真の画像出力 ──
+    def _get_full_cropped(self, g, c, n):
+        """指定生徒の実写真をフル解像度で開いてクロップして返す。
+        編集中の生徒は現在のスライダー値、それ以外は保存済み/自動値を使う。"""
+        path = self.photos.get(n)
+        if not path or not os.path.exists(path):
+            return None
+        full = fix_exif(Image.open(path))
+        if self.current_key == (g, c, n):
+            top  = float(self.v_top.get())
+            left = float(self.v_left.get())
+            zoom = float(self.v_zoom.get())
+        else:
+            ov = self.overrides.get((g, c, n))
+            if ov:
+                top, left, zoom = (float(ov.get('top_pct', 0)),
+                                   float(ov.get('left_pct', 0)),
+                                   float(ov.get('zoom', 1.0)))
+            else:
+                top, left, zoom = auto_initial_crop_params(make_proxy(full))
+        return do_crop(full, top, left, zoom)
+
+    def _student_info(self, g, c, n):
+        info = self.roster_full.get((g, c), {}).get(n, {})
+        return info.get("kanji", ""), info.get("kana", "")
+
+    def export_current_student(self):
+        if not self.current_key:
+            messagebox.showinfo("写真未選択", "先にクラス一覧から生徒を選んでください")
+            return
+        g, c, n = self.current_key
+        try:
+            cropped = self._get_full_cropped(g, c, n)
+        except Exception as e:
+            messagebox.showerror("エラー", f"写真の読み込みに失敗しました\n{e}")
+            return
+        if cropped is None:
+            messagebox.showerror("エラー", "写真が見つかりません")
+            return
+        kanji, kana = self._student_info(g, c, n)
+        card = render_id_card(cropped, g, c, n, kanji, kana)
+        out_dir = os.path.join(self.base, "output", "顔写真")
+        os.makedirs(out_dir, exist_ok=True)
+        safe = (kanji or f"{n}番").replace(" ", "").replace("/", "_").replace(os.sep, "_")
+        out_path = os.path.join(out_dir, f"{g}年{c}組_{n:02d}_{safe}.png")
+        card.save(out_path)
+        self.status_var.set(f"  📸 保存しました: {os.path.basename(out_path)}")
+        self._reveal_in_finder(out_path)
+
+    def _reveal_in_finder(self, path):
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            pass
 
     def reset_current(self):
         if not self.current_key: return
