@@ -2824,12 +2824,8 @@ class ProgressDialog:
         self.app = app
         if self.app and hasattr(self.app, "_modal_open"):
             self.app._modal_open()
-            self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _on_close(self):
-        if self.app and hasattr(self.app, "_modal_close"):
-            self.app._modal_close()
-        self.win.destroy()
         sw = self.win.winfo_screenwidth()
         sh = self.win.winfo_screenheight()
         ww, wh = 640, 420
@@ -2886,6 +2882,14 @@ class ProgressDialog:
         # フォルダを開くボタン（成功時のみ表示）
         self._open_btn_frame = btn_frame
         self.open_folder_btn = None
+        # 前面に出して確実に描画
+        self.win.lift()
+        self.win.update_idletasks()
+
+    def _on_close(self):
+        if self.app and hasattr(self.app, "_modal_close"):
+            self.app._modal_close()
+        self.win.destroy()
 
     def update(self, percent=None, status=None, log=None):
         if percent is not None:
@@ -2918,6 +2922,11 @@ class ProgressDialog:
                     bg=PALETTE["primary"], fg="#ffffff",
                     font=(system_font_family(), 12, "bold"), padx=20, pady=8)
                 self.open_folder_btn.pack(side="right", padx=8)
+            # 成功時は数秒後に自動で閉じる（「消えない」問題への対応）
+            try:
+                self.win.after(2500, self._on_close)
+            except Exception:
+                pass
         self.win.update_idletasks()
 
     def _open_folder(self):
