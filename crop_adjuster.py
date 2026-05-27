@@ -71,6 +71,22 @@ def fix_exif(img):
     return img
 
 # ════════════════════════════════════════════════════════
+#  プロキシ（編集用の縮小画像）
+# ════════════════════════════════════════════════════════
+# 元写真は4000px超で重い。クロップ値は%指定で解像度非依存なので、
+# 編集・プレビュー・顔検出は縮小プロキシで行い、最終出力のみ実写真を使う。
+PROXY_MAX = 1500  # 長辺の最大px
+
+def make_proxy(img, max_dim=PROXY_MAX):
+    """長辺が max_dim を超える画像を縮小して返す。小さい画像はそのまま。"""
+    w, h = img.size
+    long_side = max(w, h)
+    if long_side <= max_dim:
+        return img.convert("RGB") if img.mode != "RGB" else img
+    s = max_dim / long_side
+    return img.resize((max(1, int(w*s)), max(1, int(h*s))), Image.LANCZOS).convert("RGB")
+
+# ════════════════════════════════════════════════════════
 #  顔検出
 # ════════════════════════════════════════════════════════
 _cascade = None
@@ -162,11 +178,21 @@ def auto_initial_crop_params(pil_img):
 # ════════════════════════════════════════════════════════
 #  プレビュー描画
 # ════════════════════════════════════════════════════════
-def render_clipping_preview(pil_img, top_pct, left_pct, zoom, max_w=420, max_h=560):
+def prepare_preview_base(pil_img, max_w=420, max_h=560):
+    """重いリサイズ処理。写真ロード時に1回だけ実行してキャッシュする。
+    戻り値を render_clipping_overlay に渡す。"""
     iw, ih = pil_img.size
     scale = min(max_w/iw, max_h/ih)
     dw, dh = int(iw*scale), int(ih*scale)
-    base = pil_img.resize((dw, dh), Image.LANCZOS).convert("RGB")
+    base_rgba = pil_img.resize((dw, dh), Image.LANCZOS).convert("RGBA")
+    return {"base_rgba": base_rgba, "scale": scale,
+            "iw": iw, "ih": ih, "dw": dw, "dh": dh}
+
+def render_clipping_overlay(pb, top_pct, left_pct, zoom, px_scale=1.0):
+    """キャッシュ済み基準画像(pb)にクロップ枠オーバーレイを描く軽い処理。
+    スライダー操作のたびに呼ばれる。px_scale は実写真px換算用の係数。"""
+    scale = pb["scale"]; iw = pb["iw"]; ih = pb["ih"]
+    dw = pb["dw"]; dh = pb["dh"]
     x1, y1, x2, y2 = calc_crop_box(iw, ih, top_pct, left_pct, zoom)
     bx1, by1 = int(x1*scale), int(y1*scale)
     bx2, by2 = int(x2*scale), int(y2*scale)
@@ -174,27 +200,32 @@ def render_clipping_preview(pil_img, top_pct, left_pct, zoom, max_w=420, max_h=5
     od = ImageDraw.Draw(overlay)
     od.rectangle([0,0,dw,dh], fill=(10,14,28,150))
     od.rectangle([bx1, by1, bx2, by2], fill=(0,0,0,0))
-    result = Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
+    result = Image.alpha_composite(pb["base_rgba"], overlay).convert("RGB")
     rd = ImageDraw.Draw(result)
     GOLD = (245, 175, 60)
     rd.rectangle([bx1, by1, bx2-1, by2-1], outline=GOLD, width=3)
     # 角ハンドル（クリック可能領域として大きめに描画）
     H = 16
     for cx, cy in [(bx1, by1), (bx2-1, by1), (bx1, by2-1), (bx2-1, by2-1)]:
-        # 白い丸＋金色の縁取り（つかみやすい見た目）
         rd.ellipse([cx-H//2, cy-H//2, cx+H//2, cy+H//2],
                    fill=(255,255,255), outline=GOLD, width=3)
-    info = f"crop: {x2-x1}×{y2-y1} px"
+    # クロップサイズは実写真の解像度で表示（px_scale で換算）
+    real_w = int((x2-x1) * px_scale); real_h = int((y2-y1) * px_scale)
+    info = f"crop: {real_w}×{real_h} px"
     f = get_pil_font(13)
     bb = rd.textbbox((0,0), info, font=f)
     rd.rectangle([6, 6, bb[2]+18, bb[3]+14], fill=(0,0,0,180))
     rd.text((12, 10), info, font=f, fill=(255,255,255))
-    # コーナー位置も返す
     corners = {
         "tl": (bx1, by1), "tr": (bx2-1, by1),
         "bl": (bx1, by2-1), "br": (bx2-1, by2-1)
     }
     return result, scale, (bx1, by1, bx2, by2), corners
+
+# 後方互換：一括描画版（バッチエディタ等から使用）
+def render_clipping_preview(pil_img, top_pct, left_pct, zoom, max_w=420, max_h=560):
+    pb = prepare_preview_base(pil_img, max_w, max_h)
+    return render_clipping_overlay(pb, top_pct, left_pct, zoom)
 
 # ── ポスターセル ──
 C_CARD    = (0xF7, 0xF9, 0xFC)
@@ -505,11 +536,17 @@ class CropAdjusterApp:
         self.roster_path   = find_roster_file(base)
         self.roster_data   = load_master_roster(self.roster_path) if self.roster_path else {}
 
-        self.current_img      = None
+        self.current_img      = None   # 編集用プロキシ（縮小画像）
         self.current_key      = None
+        self.current_orig_size = None  # 実写真の解像度 (w,h)
+        self._preview_base    = None   # キャッシュ済みプレビュー基準画像
+        self._px_scale        = 1.0
         self.photos           = {}
         self.photo_nums       = []
         self.auto_initial     = (0.0, 0.0, 1.0)
+        # プロキシ＆顔検出結果のメモリキャッシュ（前/次ナビを高速化）
+        # path -> (proxy_img, auto_initial, orig_size)
+        self._proxy_cache     = {}
 
         self._update_pending = False
         self._dragging = False
@@ -1167,7 +1204,11 @@ class CropAdjusterApp:
         folder = find_class_folder(self.base, g, c)
         if not folder:
             messagebox.showerror("エラー", f"{g}年{c}組のフォルダが見つかりません"); return
-        self.photos = collect_photos(folder, g, c)
+        new_photos = collect_photos(folder, g, c)
+        # 別クラスに切り替わったらプロキシキャッシュを破棄（メモリ肥大防止）
+        if set(new_photos.values()) != set(self.photos.values()):
+            self._proxy_cache.clear()
+        self.photos = new_photos
         self.photo_nums = sorted(self.photos.keys())
         if not self.photo_nums:
             messagebox.showwarning("写真なし", f"{g}年{c}組に写真がありません"); return
@@ -1179,8 +1220,24 @@ class CropAdjusterApp:
             self.status_var.set(f"⚠ {g}年{c}組 {n}番の写真が見つかりません"); return
         self.current_key = (g, c, n)
         self.v_grade.set(str(g)); self.v_cls.set(str(c)); self.v_num.set(str(n))
-        self.current_img = fix_exif(Image.open(self.photos[n]))
-        self.auto_initial = auto_initial_crop_params(self.current_img)
+        # 編集用プロキシをキャッシュから取得（なければ生成）
+        path = self.photos[n]
+        cached = self._proxy_cache.get(path)
+        if cached is not None:
+            self.current_img, self.auto_initial, self.current_orig_size = cached
+        else:
+            full = fix_exif(Image.open(path))
+            self.current_orig_size = full.size
+            proxy = make_proxy(full)
+            self.current_img = proxy
+            self.auto_initial = auto_initial_crop_params(proxy)
+            self._proxy_cache[path] = (self.current_img, self.auto_initial,
+                                       self.current_orig_size)
+        # プレビュー基準画像を1回だけ生成（スライダー操作を高速化）
+        self._preview_base = prepare_preview_base(
+            self.current_img, self.PREVIEW_W, self.PREVIEW_H)
+        # 実写真px換算係数（プロキシ→実写真）
+        self._px_scale = self.current_orig_size[0] / self.current_img.size[0]
         ov = self.overrides.get((g,c,n))
         if ov:
             self.v_top.set(float(ov.get('top_pct', 0)))
@@ -1219,9 +1276,10 @@ class CropAdjusterApp:
         top  = self.v_top.get()
         left = self.v_left.get()
         zoom = float(self.v_zoom.get())
-        prev_img, _, _, self._corners = render_clipping_preview(
-            self.current_img, top, left, zoom,
-            max_w=self.PREVIEW_W, max_h=self.PREVIEW_H)
+        # キャッシュ済み基準画像にオーバーレイだけ再描画（高速）
+        prev_img, _, _, self._corners = render_clipping_overlay(
+            self._preview_base, top, left, zoom,
+            px_scale=getattr(self, "_px_scale", 1.0))
         self._prev_tk = ImageTk.PhotoImage(prev_img)
         self.prev_label.configure(image=self._prev_tk,
                                   width=prev_img.width, height=prev_img.height)
@@ -1759,7 +1817,7 @@ class ClassBatchEditor:
 
         for i, n in enumerate(self.nums):
             try:
-                img = fix_exif(Image.open(self.photos[n]))
+                img = make_proxy(fix_exif(Image.open(self.photos[n])))
                 self.image_cache[n] = img
                 self.face_cache[n] = auto_initial_crop_params(img)
             except Exception as e:
