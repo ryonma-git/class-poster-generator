@@ -127,7 +127,31 @@ def detect_face(pil_img):
 # ════════════════════════════════════════════════════════
 #  クロップ計算
 # ════════════════════════════════════════════════════════
-CELL_ASPECT = 1.02  # PDFの実際の写真エリア比率（A2+6×7のデフォルトケース）
+def compute_photo_aspect(paper="A2", cols=6, rows=7):
+    """PDFの写真エリアの縦横比(cw/ph)を make_poster.py と完全に同じ式で計算する。
+    ★この計算は make_poster.py の generate_poster / レイアウト定数と一致させること。
+    プレビューと実PDFのクロップを一致させるための単一ソース。"""
+    MM = 72 / 25.4
+    A2_W, A2_H = 1190.55, 1683.78   # reportlab A2 (pt)
+    A1_W, A1_H = 1683.78, 2383.94   # reportlab A1 (pt)
+    MARGIN_X = 15*MM; MARGIN_TOP = 18*MM; MARGIN_BOT = 12*MM
+    HEADER_H = 25*MM; GAP_COL = 5*MM; GAP_ROW = 6*MM; LABEL_H = 18*MM
+    P = 150/72.0
+    if paper == "A1":
+        pw, ph = int(A1_W*P), int(A1_H*P)
+    else:
+        pw, ph = int(A2_W*P), int(A2_H*P)
+    mx = int(MARGIN_X*P); mt = int(MARGIN_TOP*P); mb = int(MARGIN_BOT*P)
+    hh = int(HEADER_H*P); gc = int(GAP_COL*P); gr = int(GAP_ROW*P); lh = int(LABEL_H*P)
+    cw = (pw - 2*mx - (cols-1)*gc) // cols
+    available_h = (ph - mt - hh - mb) - (rows-1)*gr
+    ch = available_h // rows
+    photo_h = ch - lh
+    return cw / photo_h
+
+# PDFの実際の写真エリア比率（A2 6×7 デフォルト）。make_poster.py と一致。
+# 旧 1.02 は近似値で、実際は約1.13。プレビューとPDFで顔の下が切れる不一致の原因だった。
+CELL_ASPECT = compute_photo_aspect("A2", 6, 7)
 
 def calc_crop_box(img_w, img_h, top_pct, left_pct, zoom):
     if img_w / img_h < CELL_ASPECT:
