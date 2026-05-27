@@ -365,6 +365,65 @@ def render_class_overview(class_items, current_num=None, max_w=560, thumb_w=110)
                font=f_nm, fill=(50, 50, 70), anchor="ra")
     return img
 
+# ── クラス顔写真一覧シート（名簿風・名前/ふりがな付き、出力用）──
+def render_roster_sheet(grade, cls, items, cols=6, thumb_w=180):
+    """クラス全員を1枚にまとめた一覧シートを生成。
+    items: [(num, kanji, kana, cropped_img_or_None), ...]
+    名簿・連絡網・行方不明時の確認などに使える高解像度シート。"""
+    pad = 16
+    title_h = 70
+    thumb_h = int(thumb_w / CELL_ASPECT)
+    name_h = 56
+    cell_w = thumb_w + pad
+    cell_h = thumb_h + name_h + pad
+    rows = max(1, (len(items) + cols - 1) // cols)
+    canvas_w = cols * cell_w + pad
+    canvas_h = title_h + rows * cell_h + pad
+    img = Image.new("RGB", (canvas_w, canvas_h), (248, 249, 251))
+    d = ImageDraw.Draw(img)
+    # タイトル帯
+    d.rectangle([0, 0, canvas_w, title_h], fill=C_LBL_BG)
+    f_title = get_pil_font(30)
+    d.text((pad+6, title_h//2), f"{grade}年 {cls}組  顔写真一覧",
+           font=f_title, fill=(255, 255, 255), anchor="lm")
+    f_cnt = get_pil_font(16)
+    d.text((canvas_w-pad-6, title_h//2), f"{len(items)}名",
+           font=f_cnt, fill=(210, 224, 240), anchor="rm")
+    for idx, (num, kanji, kana, cropped) in enumerate(items):
+        col = idx % cols; row = idx // cols
+        x = pad + col * cell_w
+        y = title_h + pad + row * cell_h
+        d.rounded_rectangle([x, y, x+thumb_w, y+thumb_h+name_h],
+                            radius=10, fill=(255, 255, 255),
+                            outline=(220, 226, 236), width=1)
+        if cropped is not None:
+            try:
+                t = cropped.resize((thumb_w-6, thumb_h-6), Image.LANCZOS)
+                img.paste(t.convert("RGB"), (x+3, y+3))
+            except Exception:
+                pass
+        # 番号バッジ
+        f_num = get_pil_font(18)
+        d.text((x+8, y+thumb_h+6), f"{num:02d}", font=f_num, fill=C_NUM_FG)
+        # 漢字名
+        f_nm = get_pil_font(17)
+        kanji_disp = kanji or f"{num}番"
+        avail = thumb_w - 10
+        while True:
+            bb = d.textbbox((0,0), kanji_disp, font=f_nm)
+            if bb[2]-bb[0] <= avail or f_nm.size <= 11:
+                break
+            f_nm = get_pil_font(f_nm.size - 1)
+        d.text((x+thumb_w-8, y+thumb_h+8), kanji_disp,
+               font=f_nm, fill=(30, 36, 46), anchor="ra")
+        # ふりがな
+        if kana:
+            f_kn = get_pil_font(11)
+            kana_disp = kana if len(kana) <= 14 else kana[:13]+"…"
+            d.text((x+thumb_w-8, y+thumb_h+32), kana_disp,
+                   font=f_kn, fill=(120, 130, 145), anchor="ra")
+    return img
+
 # ════════════════════════════════════════════════════════
 #  名簿・写真関連
 # ════════════════════════════════════════════════════════
@@ -946,6 +1005,16 @@ class CropAdjusterApp:
                  font=self._font(11, True), padx=10, pady=10
                 ).pack(fill="x", padx=14, pady=4)
 
+        MacButton(right, "📁 クラス全員を個別出力", self.export_class_all,
+                 bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                 font=self._font(11, True), padx=10, pady=8
+                ).pack(fill="x", padx=14, pady=3)
+
+        MacButton(right, "📋 クラス一覧シートを出力", self.export_roster_sheet,
+                 bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                 font=self._font(11, True), padx=10, pady=8
+                ).pack(fill="x", padx=14, pady=3)
+
         MacButton(right, "🖼 クラス全員のプレビュー", self.show_class_overview,
                  bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
                  font=self._font(11, True), padx=10, pady=10
@@ -1520,6 +1589,75 @@ class CropAdjusterApp:
                 "写真フォルダに生徒情報のExcelを置いてください。")
             return
         SearchWindow(self)
+
+    # ── クラス全員を個別PNG出力 ──
+    def export_class_all(self):
+        if not self.current_key:
+            messagebox.showinfo("情報", "先にクラスを選択してください")
+            return
+        g, c, _ = self.current_key
+        photos = self._class_photos(g, c)
+        nums = sorted(photos.keys())
+        if not nums:
+            messagebox.showwarning("写真なし", f"{g}年{c}組に写真がありません")
+            return
+        out_dir = os.path.join(self.base, "output", "顔写真", f"{g}年{c}組")
+        os.makedirs(out_dir, exist_ok=True)
+
+        def worker():
+            done = 0
+            for n in nums:
+                try:
+                    cropped = self._get_full_cropped(g, c, n)
+                    if cropped is None:
+                        continue
+                    kanji, kana = self._student_info(g, c, n)
+                    card = render_id_card(cropped, g, c, n, kanji, kana)
+                    safe = (kanji or f"{n}番").replace(" ", "").replace("/", "_").replace(os.sep, "_")
+                    card.save(os.path.join(out_dir, f"{g}年{c}組_{n:02d}_{safe}.png"))
+                    done += 1
+                except Exception:
+                    pass
+                self.root.after(0, self.status_var.set,
+                                f"  📸 出力中... {done}/{len(nums)}")
+            self.root.after(0, self._export_done, out_dir,
+                            f"{g}年{c}組 全{done}名を出力しました")
+        threading.Thread(target=worker, daemon=True).start()
+        self.status_var.set(f"  📸 {g}年{c}組 の出力を開始...")
+
+    # ── クラス一覧シートを1枚出力 ──
+    def export_roster_sheet(self):
+        if not self.current_key:
+            messagebox.showinfo("情報", "先にクラスを選択してください")
+            return
+        g, c, _ = self.current_key
+        photos = self._class_photos(g, c)
+        nums = sorted(photos.keys())
+        if not nums:
+            messagebox.showwarning("写真なし", f"{g}年{c}組に写真がありません")
+            return
+
+        def worker():
+            items = []
+            for n in nums:
+                kanji, kana = self._student_info(g, c, n)
+                thumb = self._make_face_thumb(g, c, n, size=180)
+                items.append((n, kanji, kana, thumb))
+                self.root.after(0, self.status_var.set,
+                                f"  🖼 一覧シート生成中... {len(items)}/{len(nums)}")
+            sheet = render_roster_sheet(g, c, items)
+            out_dir = os.path.join(self.base, "output", "顔写真")
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f"{g}年{c}組_一覧シート.png")
+            sheet.save(out_path)
+            self.root.after(0, self._export_done, out_path,
+                            f"{g}年{c}組 一覧シートを出力しました")
+        threading.Thread(target=worker, daemon=True).start()
+        self.status_var.set(f"  🖼 {g}年{c}組 一覧シート生成中...")
+
+    def _export_done(self, reveal_path, msg):
+        self.status_var.set(f"  ✅ {msg}")
+        self._reveal_in_finder(reveal_path)
 
     def reset_current(self):
         if not self.current_key: return
