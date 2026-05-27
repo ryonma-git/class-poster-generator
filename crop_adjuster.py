@@ -1948,7 +1948,10 @@ class SearchWindow:
                        highlightthickness=2, highlightbackground=PALETTE["border"],
                        highlightcolor=PALETTE["primary"], relief="flat")
         ent.pack(fill="x", padx=18, pady=(0,12), ipady=6)
-        ent.bind("<KeyRelease>", lambda e: self._on_query_change())
+        # 日本語IME入力でも確実に拾えるよう StringVar の変更を監視（デバウンス付き）
+        self._debounce_id = None
+        self.q_var.trace_add("write", lambda *a: self._schedule_search())
+        ent.bind("<Return>", lambda e: self._on_query_change())
         self.win.after(200, ent.focus_set)
 
         self.count_var = tk.StringVar(value=f"全 {len(self.index)} 名")
@@ -1977,11 +1980,24 @@ class SearchWindow:
         self.canvas.bind_all("<MouseWheel>", _wheel)
 
         self._render_results(self.index)
+        # 初回描画を確実に反映（開いた直後に空白に見える問題の対策）
+        self.win.after(50, self.win.update_idletasks)
+
+    def _schedule_search(self):
+        """入力のたびに即検索すると重いので250msのデバウンスをかける。"""
+        if self._debounce_id is not None:
+            try:
+                self.win.after_cancel(self._debounce_id)
+            except Exception:
+                pass
+        self._debounce_id = self.win.after(250, self._on_query_change)
 
     def _on_query_change(self):
+        self._debounce_id = None
         q = self.q_var.get().strip()
         if not q:
             matches = self.index
+            self.count_var.set(f"全 {len(matches)} 名")
         else:
             ql = q.lower()
             matches = []
@@ -1991,7 +2007,7 @@ class SearchWindow:
                 # スペース除去でも一致するように
                 if ql in hay or ql.replace(" ", "") in hay.replace(" ", ""):
                     matches.append(rec)
-        self.count_var.set(f"該当 {len(matches)} 名")
+            self.count_var.set(f"該当 {len(matches)} 名")
         self._render_results(matches)
 
     def _render_results(self, matches):
@@ -2103,6 +2119,11 @@ class SearchWindow:
         messagebox.showinfo("出力完了", f"保存しました:\n{os.path.basename(out_path)}")
 
     def _close(self):
+        if self._debounce_id is not None:
+            try:
+                self.win.after_cancel(self._debounce_id)
+            except Exception:
+                pass
         try:
             self.canvas.unbind_all("<MouseWheel>")
         except Exception:
