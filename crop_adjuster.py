@@ -741,7 +741,13 @@ class CropAdjusterApp:
         open_btn = MacButton(topbar_inner, "開く", self.open_photo,
                             bg=PALETTE["primary"], fg="#ffffff",
                             font=self._font(12, True), padx=22, pady=6)
-        open_btn.pack(side="left", padx=(16,12), pady=15)
+        open_btn.pack(side="left", padx=(16,8), pady=15)
+
+        # 名前で検索ボタン
+        search_btn = MacButton(topbar_inner, "🔍 名前で検索", self.show_search,
+                            bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                            font=self._font(12, True), padx=16, pady=6)
+        search_btn.pack(side="left", padx=(0,12), pady=15)
 
         # 件数バッジ
         self.saved_var = tk.StringVar(value=f"調整済み {len(self.overrides)}件")
@@ -1282,6 +1288,18 @@ class CropAdjusterApp:
         self.open_photo()
         self.root.focus_set()
 
+    def _select_class_in_list(self, g, c):
+        """クラス一覧(listbox)で(g,c)を選択状態にする。検索からの遷移用。"""
+        for i, (cg, cc, _) in enumerate(self.classes_list):
+            if cg == g and cc == c:
+                try:
+                    self.class_listbox.selection_clear(0, tk.END)
+                    self.class_listbox.selection_set(i)
+                    self.class_listbox.see(i)
+                except Exception:
+                    pass
+                return
+
     # ── 写真ロード ──
     def open_photo(self):
         try:
@@ -1460,6 +1478,48 @@ class CropAdjusterApp:
                 subprocess.Popen(["xdg-open", os.path.dirname(path)])
         except Exception:
             pass
+
+    # ── クラス写真の参照（検索・一括出力で使用、キャッシュ付き）──
+    def _class_photos(self, g, c):
+        """(g,c)の写真辞書 {番号: path} を返す。フォルダ探索結果をキャッシュ。"""
+        if not hasattr(self, "_class_photos_cache"):
+            self._class_photos_cache = {}
+        key = (g, c)
+        if key not in self._class_photos_cache:
+            folder = find_class_folder(self.base, g, c)
+            self._class_photos_cache[key] = collect_photos(folder, g, c) if folder else {}
+        return self._class_photos_cache[key]
+
+    def _find_photo_path(self, g, c, n):
+        return self._class_photos(g, c).get(n)
+
+    def _make_face_thumb(self, g, c, n, size=120):
+        """指定生徒の顔サムネイル(PIL)を生成。検索結果表示用。"""
+        path = self._find_photo_path(g, c, n)
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            proxy = make_proxy(fix_exif(Image.open(path)), max_dim=600)
+            ov = self.overrides.get((g, c, n))
+            if ov:
+                t, l, z = (float(ov.get('top_pct', 0)), float(ov.get('left_pct', 0)),
+                           float(ov.get('zoom', 1.0)))
+            else:
+                t, l, z = auto_initial_crop_params(proxy)
+            cropped = do_crop(proxy, t, l, z)
+            h = int(size / CELL_ASPECT)
+            return cropped.resize((size, h), Image.LANCZOS)
+        except Exception:
+            return None
+
+    # ── 名前・ふりがな検索 ──
+    def show_search(self):
+        if not self.roster_full:
+            messagebox.showinfo("名簿なし",
+                "名簿(xlsx)が読み込めないため検索できません。\n"
+                "写真フォルダに生徒情報のExcelを置いてください。")
+            return
+        SearchWindow(self)
 
     def reset_current(self):
         if not self.current_key: return
@@ -1702,6 +1762,215 @@ class CropAdjusterApp:
         threading.Thread(target=worker, daemon=True).start()
 
 
+
+
+# ════════════════════════════════════════════════════════
+#  名前・ふりがな検索画面
+# ════════════════════════════════════════════════════════
+class SearchWindow:
+    """漢字名・ふりがなの部分一致で全校児童を検索し、顔写真付きで一覧表示。
+    結果から「開く」（編集画面に飛ぶ）や「画像出力」ができる。"""
+
+    def __init__(self, app):
+        self.app = app
+        self.root = app.root
+        # 全児童のフラット索引を構築: [(g, c, n, kanji, kana), ...]
+        self.index = []
+        for (g, c), students in sorted(app.roster_full.items()):
+            for n, info in sorted(students.items()):
+                self.index.append((g, c, n,
+                                   info.get("kanji", ""), info.get("kana", "")))
+        self._thumb_refs = {}     # サムネ参照保持（GC防止）
+        self._thumb_thread = None
+        self._search_seq = 0      # 検索世代（古いスレッド結果を無視）
+
+        self.win = tk.Toplevel(self.root)
+        self.win.title("名前で検索")
+        self.win.configure(bg=PALETTE["bg"])
+        sw = self.win.winfo_screenwidth(); sh = self.win.winfo_screenheight()
+        ww = min(720, int(sw*0.6)); wh = min(760, int(sh*0.82))
+        self.win.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
+        app._modal_open()
+        self.win.protocol("WM_DELETE_WINDOW", self._close)
+
+        # ヘッダー＋検索入力
+        head = tk.Frame(self.win, bg=PALETTE["primary"], height=56)
+        head.pack(fill="x"); head.pack_propagate(False)
+        tk.Label(head, text="🔍 名前で検索", bg=PALETTE["primary"], fg="#ffffff",
+                 font=app._font(15, True)).pack(side="left", padx=20)
+
+        bar = tk.Frame(self.win, bg=PALETTE["panel"])
+        bar.pack(fill="x", padx=0, pady=0)
+        tk.Label(bar, text="漢字名・ふりがな・番号で部分一致検索",
+                 bg=PALETTE["panel"], fg=PALETTE["text_dim"],
+                 font=app._font(10)).pack(anchor="w", padx=18, pady=(10,2))
+        self.q_var = tk.StringVar()
+        ent = tk.Entry(bar, textvariable=self.q_var, font=app._font(15),
+                       bg=PALETTE["input_bg"], fg=PALETTE["text"],
+                       highlightthickness=2, highlightbackground=PALETTE["border"],
+                       highlightcolor=PALETTE["primary"], relief="flat")
+        ent.pack(fill="x", padx=18, pady=(0,12), ipady=6)
+        ent.bind("<KeyRelease>", lambda e: self._on_query_change())
+        self.win.after(200, ent.focus_set)
+
+        self.count_var = tk.StringVar(value=f"全 {len(self.index)} 名")
+        tk.Label(bar, textvariable=self.count_var, bg=PALETTE["panel"],
+                 fg=PALETTE["accent_dk"], font=app._font(10, True)
+                 ).pack(anchor="w", padx=18, pady=(0,10))
+
+        # 結果スクロール領域
+        body = tk.Frame(self.win, bg=PALETTE["bg"])
+        body.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(body, bg=PALETTE["bg"], highlightthickness=0)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=sb.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.results_frame = tk.Frame(self.canvas, bg=PALETTE["bg"])
+        self._win_id = self.canvas.create_window((0,0), anchor="nw",
+                                                 window=self.results_frame)
+        self.results_frame.bind("<Configure>", lambda e: self.canvas.configure(
+            scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
+            self._win_id, width=e.width))
+        def _wheel(e):
+            step = -1*int(e.delta) if IS_MAC else -1*int(e.delta/120)
+            self.canvas.yview_scroll(step, "units")
+        self.canvas.bind_all("<MouseWheel>", _wheel)
+
+        self._render_results(self.index)
+
+    def _on_query_change(self):
+        q = self.q_var.get().strip()
+        if not q:
+            matches = self.index
+        else:
+            ql = q.lower()
+            matches = []
+            for rec in self.index:
+                g, c, n, kanji, kana = rec
+                hay = f"{kanji} {kana} {g}年{c}組{n}番 {n}".lower()
+                # スペース除去でも一致するように
+                if ql in hay or ql.replace(" ", "") in hay.replace(" ", ""):
+                    matches.append(rec)
+        self.count_var.set(f"該当 {len(matches)} 名")
+        self._render_results(matches)
+
+    def _render_results(self, matches):
+        self._search_seq += 1
+        for w in self.results_frame.winfo_children():
+            w.destroy()
+        self._thumb_refs.clear()
+        if not matches:
+            tk.Label(self.results_frame, text="該当する児童がいません",
+                     bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                     font=self.app._font(12)).pack(pady=40)
+            return
+        # 多すぎる場合はサムネ生成を上限で抑える
+        THUMB_LIMIT = 60
+        rows = []
+        for i, rec in enumerate(matches):
+            rows.append(self._make_row(rec, with_thumb=(i < THUMB_LIMIT)))
+        if len(matches) > THUMB_LIMIT:
+            tk.Label(self.results_frame,
+                     text=f"※ 写真表示は先頭{THUMB_LIMIT}名まで（絞り込んでください）",
+                     bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                     font=self.app._font(9)).pack(pady=8)
+        # サムネをバックグラウンドで生成
+        self._start_thumb_loading(matches[:THUMB_LIMIT], rows, self._search_seq)
+
+    def _make_row(self, rec, with_thumb=True):
+        g, c, n, kanji, kana = rec
+        row = tk.Frame(self.results_frame, bg=PALETTE["panel"],
+                       highlightthickness=1, highlightbackground=PALETTE["border"])
+        row.pack(fill="x", padx=12, pady=5)
+        # サムネ枠
+        thumb_h = int(96 / CELL_ASPECT)
+        thumb_lbl = tk.Label(row, bg=PALETTE["panel_alt"],
+                             width=96, height=thumb_h)
+        thumb_lbl.pack(side="left", padx=10, pady=8)
+        # 情報
+        info = tk.Frame(row, bg=PALETTE["panel"])
+        info.pack(side="left", fill="both", expand=True, padx=6, pady=8)
+        tk.Label(info, text=f"{g}年 {c}組  {n}番", bg=PALETTE["panel"],
+                 fg=PALETTE["accent_dk"], font=self.app._font(11, True),
+                 anchor="w").pack(fill="x")
+        tk.Label(info, text=kanji or "（名前未登録）", bg=PALETTE["panel"],
+                 fg=PALETTE["text"], font=self.app._font(15, True),
+                 anchor="w").pack(fill="x")
+        tk.Label(info, text=kana, bg=PALETTE["panel"],
+                 fg=PALETTE["text_dim"], font=self.app._font(10),
+                 anchor="w").pack(fill="x")
+        # ボタン
+        btns = tk.Frame(row, bg=PALETTE["panel"])
+        btns.pack(side="right", padx=10)
+        MacButton(btns, "開く", lambda r=rec: self._open_student(r),
+                  bg=PALETTE["primary"], fg="#ffffff",
+                  font=self.app._font(10, True), padx=12, pady=6
+                  ).pack(side="top", pady=3)
+        MacButton(btns, "画像出力", lambda r=rec: self._export_student(r),
+                  bg=PALETTE["accent"], fg="#ffffff",
+                  font=self.app._font(10, True), padx=12, pady=6
+                  ).pack(side="top", pady=3)
+        return thumb_lbl
+
+    def _start_thumb_loading(self, matches, thumb_labels, seq):
+        def worker():
+            for rec, lbl in zip(matches, thumb_labels):
+                if seq != self._search_seq:
+                    return  # 新しい検索が始まった → 中断
+                g, c, n, _, _ = rec
+                thumb = self.app._make_face_thumb(g, c, n, size=96)
+                if thumb is None:
+                    continue
+                self.win.after(0, self._set_thumb, lbl, thumb, seq)
+        self._thumb_thread = threading.Thread(target=worker, daemon=True)
+        self._thumb_thread.start()
+
+    def _set_thumb(self, lbl, pil_img, seq):
+        if seq != self._search_seq:
+            return
+        try:
+            tkimg = ImageTk.PhotoImage(pil_img)
+            self._thumb_refs[id(lbl)] = tkimg
+            lbl.configure(image=tkimg, width=pil_img.width, height=pil_img.height)
+        except Exception:
+            pass
+
+    def _open_student(self, rec):
+        g, c, n, _, _ = rec
+        self._close()
+        self.app.v_grade.set(str(g)); self.app.v_cls.set(str(c)); self.app.v_num.set(str(n))
+        self.app.open_photo()
+        # クラス一覧の選択も同期
+        self.app._select_class_in_list(g, c)
+
+    def _export_student(self, rec):
+        g, c, n, kanji, kana = rec
+        try:
+            cropped = self.app._get_full_cropped(g, c, n)
+        except Exception as e:
+            messagebox.showerror("エラー", f"写真の読み込みに失敗しました\n{e}")
+            return
+        if cropped is None:
+            messagebox.showerror("エラー", "写真が見つかりません")
+            return
+        card = render_id_card(cropped, g, c, n, kanji, kana)
+        out_dir = os.path.join(self.app.base, "output", "顔写真")
+        os.makedirs(out_dir, exist_ok=True)
+        safe = (kanji or f"{n}番").replace(" ", "").replace("/", "_").replace(os.sep, "_")
+        out_path = os.path.join(out_dir, f"{g}年{c}組_{n:02d}_{safe}.png")
+        card.save(out_path)
+        self.app._reveal_in_finder(out_path)
+        messagebox.showinfo("出力完了", f"保存しました:\n{os.path.basename(out_path)}")
+
+    def _close(self):
+        try:
+            self.canvas.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+        self.app._modal_close()
+        self.win.destroy()
 
 
 # ════════════════════════════════════════════════════════
