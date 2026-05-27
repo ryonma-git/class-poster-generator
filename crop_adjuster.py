@@ -1979,9 +1979,13 @@ class SearchWindow:
             self.canvas.yview_scroll(step, "units")
         self.canvas.bind_all("<MouseWheel>", _wheel)
 
+        # macOSのTkではToplevelが最初のイベントまで描画されないことがあるため、
+        # 明示的に前面化＆強制描画してから結果を表示する
+        self.win.deiconify()
+        self.win.lift()
+        self.win.update()
         self._render_results(self.index)
-        # 初回描画を確実に反映（開いた直後に空白に見える問題の対策）
-        self.win.after(50, self.win.update_idletasks)
+        self.win.update_idletasks()
 
     def _schedule_search(self):
         """入力のたびに即検索すると重いので250msのデバウンスをかける。"""
