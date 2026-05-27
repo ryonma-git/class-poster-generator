@@ -1098,48 +1098,69 @@ class CropAdjusterApp:
         """互換性のため残す（実体は _setup_wheel_bindings）"""
         pass
 
+    # ── マウスホイールスクロール（トップレベル単位でスクロール先を振り分け）──
+    def _register_wheel(self, toplevel, canvas):
+        """ウィンドウ(toplevel)上でのホイール操作を canvas に向ける。
+        モーダルもこれを使えば、メインのバインドを壊さず共存できる。"""
+        if not hasattr(self, "_wheel_targets"):
+            self._wheel_targets = {}
+        self._wheel_targets[str(toplevel)] = canvas
+
+    def _unregister_wheel(self, toplevel):
+        if hasattr(self, "_wheel_targets"):
+            self._wheel_targets.pop(str(toplevel), None)
+
+    def _wheel_scroll(self, event, direction=None):
+        """グローバルなホイールハンドラ。イベント発生ウィジェットの属する
+        ウィンドウに対応する canvas をスクロールする。"""
+        try:
+            tl = event.widget.winfo_toplevel()
+        except Exception:
+            return
+        canvas = getattr(self, "_wheel_targets", {}).get(str(tl))
+        if canvas is None:
+            return
+        # Listbox など独自スクロールを持つ widget 上では何もしない
+        try:
+            if isinstance(event.widget, tk.Listbox):
+                return
+            # Text widget も独自スクロール
+            if isinstance(event.widget, tk.Text):
+                return
+        except Exception:
+            pass
+        if direction is not None:
+            step = direction
+        elif IS_MAC:
+            step = -1 * int(event.delta)
+        else:
+            step = -1 * int(event.delta / 120)
+        if step == 0:
+            step = -1 if getattr(event, "delta", 0) > 0 else 1
+        try:
+            canvas.yview_scroll(step, "units")
+        except Exception:
+            pass
+
     def _setup_wheel_bindings(self):
-        """全子ウィジェットにマウスホイールイベントを再帰的にbind
-        CTkScrollableFrame の内部Canvas を使って確実にスクロール"""
+        """メイン領域のスクロールを設定。グローバルハンドラは1回だけbind_allし、
+        スクロール先は _wheel_targets でウィンドウ単位に振り分ける。"""
         if not hasattr(self, "_main_scroll") or not HAS_CTK:
             return
-        # CTkScrollableFrame の内部Canvas を取得
         try:
             inner_canvas = self._main_scroll._parent_canvas
         except AttributeError:
             return
-
-        def _on_wheel(event):
-            if IS_MAC:
-                step = -1 * int(event.delta)
-            else:
-                step = -1 * int(event.delta / 120)
-            if step == 0:
-                step = -1 if event.delta > 0 else 1
-            inner_canvas.yview_scroll(step, "units")
-            return "break"
-
-        def _bind_recursive(widget):
-            try:
-                widget.bind("<MouseWheel>", _on_wheel, add="+")
-                widget.bind("<Button-4>",
-                    lambda e: (inner_canvas.yview_scroll(-1, "units"), "break")[1], add="+")
-                widget.bind("<Button-5>",
-                    lambda e: (inner_canvas.yview_scroll(1, "units"), "break")[1], add="+")
-            except: pass
-            for child in widget.winfo_children():
-                _bind_recursive(child)
-
-        # CTkScrollableFrame全体と全子ウィジェット
-        _bind_recursive(self._main_scroll)
-        # 内部Canvas自体にも
-        try:
-            inner_canvas.bind("<MouseWheel>", _on_wheel, add="+")
-            inner_canvas.bind("<Button-4>",
-                lambda e: (inner_canvas.yview_scroll(-1, "units"), "break")[1], add="+")
-            inner_canvas.bind("<Button-5>",
-                lambda e: (inner_canvas.yview_scroll(1, "units"), "break")[1], add="+")
-        except: pass
+        # メインウィンドウのスクロール先を登録（再構築のたびに最新Canvasへ更新）
+        self._register_wheel(self.root, inner_canvas)
+        # グローバルハンドラは一度だけbind（重複バインド防止）
+        if not getattr(self, "_wheel_bound", False):
+            self.root.bind_all("<MouseWheel>", self._wheel_scroll, add="+")
+            self.root.bind_all("<Button-4>",
+                               lambda e: self._wheel_scroll(e, -1), add="+")
+            self.root.bind_all("<Button-5>",
+                               lambda e: self._wheel_scroll(e, 1), add="+")
+            self._wheel_bound = True
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):
@@ -1998,10 +2019,8 @@ class SearchWindow:
             scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
             self._win_id, width=e.width))
-        def _wheel(e):
-            step = -1*int(e.delta) if IS_MAC else -1*int(e.delta/120)
-            self.canvas.yview_scroll(step, "units")
-        self.canvas.bind_all("<MouseWheel>", _wheel)
+        # ホイールはアプリのグローバルハンドラに登録（bind_allを使わずメインと共存）
+        self.app._register_wheel(self.win, self.canvas)
 
         # macOSのTkではToplevelが最初のイベントまで描画されないことがあるため、
         # 明示的に前面化＆強制描画してから結果を表示する
@@ -2152,10 +2171,7 @@ class SearchWindow:
                 self.win.after_cancel(self._debounce_id)
             except Exception:
                 pass
-        try:
-            self.canvas.unbind_all("<MouseWheel>")
-        except Exception:
-            pass
+        self.app._unregister_wheel(self.win)
         self.app._modal_close()
         self.win.destroy()
 
