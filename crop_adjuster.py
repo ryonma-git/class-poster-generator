@@ -16,6 +16,7 @@ import os, glob, re, csv, argparse, subprocess, threading, sys, platform, shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import font as tkfont
 
 # CustomTkinter（モダンスクロール対応）
 try:
@@ -611,74 +612,135 @@ def save_overrides(path, d):
 # ════════════════════════════════════════════════════════
 #  デザインパレット (Apple風)
 # ════════════════════════════════════════════════════════
+# Swiss Grid × 和文機能美（時間割アプリ timetable-web 由来）
+# Primary=Indigo / Accent=Amber / Base=Slate
 PALETTE = {
-    "bg":         "#f5f5f7",   # macOSの典型的な背景色
-    "panel":      "#ffffff",   # カード（純白）
-    "panel_alt":  "#fafaf7",   # 副カード
-    "input_bg":   "#fafaf7",
-    "text":       "#1d1d1f",   # iOS の primary text
-    "text_strong":"#000000",
-    "text_dim":   "#6e6e73",   # iOS の secondary
-    "text_label": "#3a3a3c",
-    "accent":     "#ff9500",   # iOS Orange
-    "accent_bg":  "#fff4e0",
-    "accent_dk":  "#cc7700",
-    "primary":    "#0a84ff",   # iOS Blue
-    "primary_bg": "#e6f0ff",
-    "primary_dk": "#0066cc",
-    "success":    "#34c759",   # iOS Green
-    "success_dk": "#28a745",
-    "danger":     "#ff3b30",   # iOS Red
-    "danger_dk":  "#cc2922",
-    "border":     "#d2d2d7",
-    "border_active":"#c5c5cc",
-    "neutral":    "#e5e5ea",   # 軽量グレー（ボタン背景用）
-    "neutral_dk": "#d1d1d6",
+    "bg":          "#f4f6fa",   # slate 背景
+    "panel":       "#ffffff",   # 白カード
+    "panel_alt":   "#f5f7fb",   # 副カード（薄スレート）
+    "input_bg":    "#f5f7fb",
+    "text":        "#1a1f2b",   # slate-900 寄り
+    "text_strong": "#0d1018",
+    "text_dim":    "#6b7280",   # slate-500
+    "text_label":  "#3b4250",   # slate-700
+    "accent":      "#e2952b",   # amber アクセント
+    "accent_bg":   "#fdf3dc",   # amber-50
+    "accent_dk":   "#a96b10",   # amber-700（文字用）
+    "primary":     "#3a56d4",   # indigo
+    "primary_bg":  "#e9edfc",   # indigo-50
+    "primary_dk":  "#2c43b0",   # indigo（hover/濃）
+    "success":     "#1aa353",   # green
+    "success_dk":  "#15833f",
+    "danger":      "#e2483d",   # red
+    "danger_dk":   "#c0392e",
+    "border":      "#e2e6ee",   # slate-200
+    "border_active":"#c7cdd9",
+    "neutral":     "#eef1f6",   # 軽量グレー（ボタン背景用）
+    "neutral_dk":  "#e2e6ee",
 }
 
 # ════════════════════════════════════════════════════════
 #  カスタムボタン（macOS対応）
 # ════════════════════════════════════════════════════════
-class MacButton(tk.Frame):
-    """tk.Buttonの色問題を回避するLabelベースのカスタムボタン"""
+def _shade(hex_color, amt):
+    """amt<0 で暗く、amt>0 で明るく。"""
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+    if amt < 0:
+        f = 1 + amt
+        r, g, b = int(r*f), int(g*f), int(b*f)
+    else:
+        r = int(r + (255-r)*amt); g = int(g + (255-g)*amt); b = int(b + (255-b)*amt)
+    clamp = lambda v: max(0, min(255, v))
+    return f'#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}'
+
+def _luminance(hex_color):
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+    return (0.299*r + 0.587*g + 0.114*b) / 255.0
+
+def _draw_round_rect(canvas, x1, y1, x2, y2, r, **kw):
+    r = max(0, min(r, (x2-x1)//2, (y2-y1)//2))
+    pts = [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r,
+           x2, y2-r, x2, y2, x2-r, y2, x1+r, y2,
+           x1, y2, x1, y2-r, x1, y1+r, x1, y1]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+class MacButton(tk.Canvas):
+    """角丸のモダンなボタン（Canvasベース）。
+    旧Labelベースから互換APIを維持（.bg / set_text / configure(bg=)）。"""
     def __init__(self, parent, text, command, bg, fg, hover_bg=None,
-                 font=("",12,"bold"), padx=14, pady=8, **kw):
-        super().__init__(parent, bg=bg, cursor="hand2",
-                        highlightthickness=0, **kw)
+                 font=("",12,"bold"), padx=14, pady=8, radius=11,
+                 parent_bg=None, border=None, **kw):
+        if parent_bg is None:
+            try:
+                parent_bg = parent.cget("bg")
+            except Exception:
+                parent_bg = PALETTE["panel"]
+        self._pbg = parent_bg
         self.command = command
         self.bg = bg
-        self.hover_bg = hover_bg or self._lighten(bg, 0.92)
-        self.label = tk.Label(self, text=text, bg=bg, fg=fg,
-                              font=font, padx=padx, pady=pady,
-                              cursor="hand2")
-        self.label.pack()
-        for w in (self, self.label):
-            w.bind("<Button-1>", self._click)
-            w.bind("<Enter>", self._enter)
-            w.bind("<Leave>", self._leave)
-
-    def _lighten(self, hex_color, factor):
-        h = hex_color.lstrip('#')
-        r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
-        if factor < 1.0:
-            r, g, b = int(r*factor), int(g*factor), int(b*factor)
+        self.fg = fg
+        self.hover_bg = hover_bg or _shade(bg, -0.07)
+        self.text = text
+        self.font = font
+        self.radius = radius
+        # 明るいボタンには輪郭線を付けて締まりを出す
+        if border is not None:
+            self.border = border
+        elif _luminance(bg) > 0.82:
+            self.border = PALETTE["border"]
         else:
-            r = min(255, int(r + (255-r)*(factor-1)))
-            g = min(255, int(g + (255-g)*(factor-1)))
-            b = min(255, int(b + (255-b)*(factor-1)))
-        return f'#{r:02x}{g:02x}{b:02x}'
+            self.border = None
+        self._padx = padx; self._pady = pady
+        # テキスト寸法を測って初期サイズを決定
+        f = tkfont.Font(font=font)
+        tw = f.measure(text); th = f.metrics("linespace")
+        w = tw + padx*2; h = th + pady*2
+        super().__init__(parent, width=w, height=h, bg=parent_bg,
+                         highlightthickness=0, bd=0, takefocus=0, **kw)
+        self._w = w; self._h = h
+        self._hover = False
+        self.bind("<Configure>", self._redraw)
+        self.bind("<Button-1>", self._click)
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self._redraw()
+
+    def _redraw(self, event=None):
+        self.delete("all")
+        w = event.width if event is not None else (self.winfo_width() or self._w)
+        h = event.height if event is not None else (self.winfo_height() or self._h)
+        if w <= 1: w = self._w
+        if h <= 1: h = self._h
+        fill = self.hover_bg if self._hover else self.bg
+        outline = self.border if self.border else fill
+        _draw_round_rect(self, 1, 1, w-1, h-1, self.radius,
+                         fill=fill, outline=outline, width=1)
+        self.create_text(w//2, h//2, text=self.text, fill=self.fg, font=self.font)
 
     def _click(self, e):
         if self.command: self.command()
     def _enter(self, e):
-        self.configure(bg=self.hover_bg)
-        self.label.configure(bg=self.hover_bg)
+        self._hover = True; self.configure(cursor="hand2"); self._redraw()
     def _leave(self, e):
-        self.configure(bg=self.bg)
-        self.label.configure(bg=self.bg)
+        self._hover = False; self._redraw()
 
+    # ── 互換API ──
     def set_text(self, text):
-        self.label.configure(text=text)
+        self.text = text; self._redraw()
+    def set_style(self, bg=None, fg=None, hover_bg=None):
+        if bg: self.bg = bg; self.hover_bg = hover_bg or _shade(bg, -0.07)
+        if fg: self.fg = fg
+        self._redraw()
+    def configure(self, **kw):
+        if 'bg' in kw and 'highlightthickness' not in kw and 'bd' not in kw:
+            self.bg = kw.pop('bg'); self.hover_bg = _shade(self.bg, -0.07)
+            self._redraw()
+        if kw:
+            try: super().configure(**kw)
+            except tk.TclError: pass
+    config = configure
 
 # ════════════════════════════════════════════════════════
 #  GUI 本体
@@ -772,14 +834,16 @@ class CropAdjusterApp:
         root = self.root
 
         # ─── ヘッダー ───
-        header = tk.Frame(root, bg=PALETTE["primary"], height=52)
+        header = tk.Frame(root, bg=PALETTE["primary"], height=54)
         header.pack(fill="x"); header.pack_propagate(False)
         tk.Label(header, text="クロップ調整ツール",
                  bg=PALETTE["primary"], fg="#ffffff",
                  font=self._font(15, True)).pack(side="left", padx=22, pady=12)
         tk.Label(header, text="個人写真ポスター",
-                 bg=PALETTE["primary"], fg="#cce4ff",
+                 bg=PALETTE["primary"], fg="#c3cdf5",
                  font=self._font(11)).pack(side="left", pady=12)
+        # 下部にアンバーのアクセントライン（Swiss grid × amber）
+        tk.Frame(root, bg=PALETTE["accent"], height=3).pack(fill="x")
 
         # ─── 上部入力エリア（カード）───
         topbar_wrap = tk.Frame(root, bg=BG)
@@ -936,10 +1000,11 @@ class CropAdjusterApp:
                     ).pack(side="left")
             scale = tk.Scale(row, from_=frm, to=to, resolution=resolution,
                              orient="horizontal", variable=var, length=380,
-                             bg=PANEL, fg=STRONG,
-                             troughcolor=PALETTE["panel_alt"],
-                             highlightthickness=0, relief="flat",
-                             activebackground=PALETTE["accent"],
+                             bg=PANEL, fg=PALETTE["primary_dk"],
+                             troughcolor=PALETTE["primary_bg"],
+                             highlightthickness=0, relief="flat", bd=1,
+                             sliderrelief="flat",
+                             activebackground=PALETTE["primary"],
                              showvalue=True, font=self._font(10, True),
                              command=self._on_slide, takefocus=0)
             scale.pack(side="left", fill="x", expand=True)
@@ -996,18 +1061,25 @@ class CropAdjusterApp:
         #   将来は「クラス全員プレビュー上で個別データを直接編集できる画面」を実装予定。
         # ----------------------------------------------------------
 
-        tk.Label(right, text="ACTIONS", bg=PANEL, fg=DIM,
-                 font=self._font(10, True), anchor="w"
-                ).pack(fill="x", padx=14, pady=(20,4))
+        def _section(title):
+            row = tk.Frame(right, bg=PANEL)
+            row.pack(fill="x", padx=14, pady=(18, 6))
+            tk.Frame(row, bg=PALETTE["primary"], width=3, height=14).pack(
+                side="left", padx=(0, 8))
+            tk.Label(row, text=title, bg=PANEL, fg=PALETTE["text_label"],
+                     font=self._font(10, True), anchor="w").pack(side="left")
+
+        # ── ポスター作成（メイン機能）──
+        _section("ポスター作成")
 
         self.v_auto_pdf = tk.BooleanVar(value=False)
         tk.Checkbutton(right, text="保存時にPDF自動再生成",
                        variable=self.v_auto_pdf,
                        bg=PANEL, fg=TEXT, selectcolor=PALETTE["panel_alt"],
                        activebackground=PANEL, activeforeground=TEXT,
-                       font=self._font(10, True), anchor="w",
+                       font=self._font(10), anchor="w",
                        highlightthickness=0, takefocus=0
-                      ).pack(fill="x", padx=14, pady=2, anchor="w")
+                      ).pack(fill="x", padx=16, pady=(0,6), anchor="w")
 
         MacButton(right, "現クラスのPDF再生成", self.regen_current_class,
                  bg=PALETTE["primary"], fg="#ffffff",
@@ -1015,53 +1087,49 @@ class CropAdjusterApp:
                 ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "全クラスPDF再生成", self.regen_all,
-                 bg=PALETTE["accent"], fg="#ffffff",
-                 font=self._font(11, True), padx=10, pady=10
+                 bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
+                 font=self._font(11, True), padx=10, pady=9
                 ).pack(fill="x", padx=14, pady=4)
 
-        # ─ 顔写真の画像出力 ─
-        tk.Label(right, text="顔写真の画像出力", bg=PANEL, fg=DIM,
-                 font=self._font(10, True), anchor="w"
-                ).pack(fill="x", padx=14, pady=(18,4))
+        MacButton(right, "🖼 クラス全員のプレビュー", self.show_class_overview,
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
+                ).pack(fill="x", padx=14, pady=4)
+
+        MacButton(right, "✏️ クラス一括調整", self.show_batch_editor,
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
+                ).pack(fill="x", padx=14, pady=4)
+
+        MacButton(right, "🎨 デザイン設定", self.show_design_editor,
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
+                ).pack(fill="x", padx=14, pady=4)
+
+        MacButton(right, "⚙ 出力ウィザード", self.show_wizard,
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
+                ).pack(fill="x", padx=14, pady=4)
+
+        # ── 顔写真の画像出力（補助機能・最下部）──
+        _section("顔写真の画像出力")
 
         MacButton(right, "📸 この生徒の写真を出力", self.export_current_student,
                  bg=PALETTE["accent"], fg="#ffffff",
-                 font=self._font(11, True), padx=10, pady=10
+                 font=self._font(11, True), padx=10, pady=9
                 ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "📁 クラス全員を個別出力", self.export_class_all,
                  bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
-                 font=self._font(11, True), padx=10, pady=8
+                 font=self._font(11), padx=10, pady=8
                 ).pack(fill="x", padx=14, pady=3)
 
         MacButton(right, "📋 クラス一覧シートを出力", self.export_roster_sheet,
                  bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
-                 font=self._font(11, True), padx=10, pady=8
+                 font=self._font(11), padx=10, pady=8
                 ).pack(fill="x", padx=14, pady=3)
 
-        MacButton(right, "🖼 クラス全員のプレビュー", self.show_class_overview,
-                 bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
-                 font=self._font(11, True), padx=10, pady=10
-                ).pack(fill="x", padx=14, pady=(12,4))
-
-        MacButton(right, "✏️ クラス一括調整", self.show_batch_editor,
-                 bg=PALETTE["primary"], fg="#ffffff",
-                 font=self._font(11, True), padx=10, pady=10
-                ).pack(fill="x", padx=14, pady=4)
-
-        MacButton(right, "🎨 デザイン設定", self.show_design_editor,
-                 bg=PALETTE["accent"], fg="#ffffff",
-                 font=self._font(11, True), padx=10, pady=10
-                ).pack(fill="x", padx=14, pady=4)
-
-        MacButton(right, "⚙ 出力ウィザード", self.show_wizard,
-                 bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
-                 font=self._font(11, True), padx=10, pady=10
-                ).pack(fill="x", padx=14, pady=4)
-
-        tk.Label(right, text="SHORTCUTS", bg=PANEL, fg=DIM,
-                 font=self._font(10, True), anchor="w"
-                ).pack(fill="x", padx=14, pady=(20,4))
+        _section("SHORTCUTS")
         sc = ("↑↓←→        枠を移動\n"
               "Shift+↑↓     ズーム\n"
               "[  ]          前 / 次（自動保存）\n"
@@ -2921,16 +2989,12 @@ class ProgressDialog:
         self.pb_var.set(100)
         if error:
             self.status_var.set("✗ " + message)
-            self.close_btn.bg = PALETTE["danger"]
-            self.close_btn.label.configure(bg=PALETTE["danger"], fg="#ffffff",
-                                          text="閉じる")
-            self.close_btn.configure(bg=PALETTE["danger"])
+            self.close_btn.set_text("閉じる")
+            self.close_btn.set_style(bg=PALETTE["danger"], fg="#ffffff")
         else:
             self.status_var.set("✓ " + message)
-            self.close_btn.bg = PALETTE["success"]
-            self.close_btn.label.configure(bg=PALETTE["success"], fg="#ffffff",
-                                          text="閉じる")
-            self.close_btn.configure(bg=PALETTE["success"])
+            self.close_btn.set_text("閉じる")
+            self.close_btn.set_style(bg=PALETTE["success"], fg="#ffffff")
             # 「フォルダを開く」ボタンを成功時のみ追加
             if self.output_dir and os.path.exists(self.output_dir):
                 self.open_folder_btn = MacButton(self._open_btn_frame,
@@ -3040,12 +3104,12 @@ class PosterWizard:
         elif s == "teacher":self._step_teacher()
         elif s == "confirm":self._step_confirm()
         # ボタン状態
-        self.btn_back.label.configure(text="← 戻る" if self.step > 0 else "")
+        self.btn_back.set_text("← 戻る" if self.step > 0 else "")
         if self.step == 0:
             self.btn_back.pack_forget()
         else:
             self.btn_back.pack(side="left", padx=14, pady=12)
-        self.btn_next.label.configure(text="生成 ✓" if self.step == len(self.steps)-1 else "次へ →")
+        self.btn_next.set_text("生成 ✓" if self.step == len(self.steps)-1 else "次へ →")
 
     def _step_mode(self):
         c = self.content
