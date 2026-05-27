@@ -699,7 +699,8 @@ class MacButton(tk.Canvas):
         w = tw + padx*2; h = th + pady*2
         super().__init__(parent, width=w, height=h, bg=parent_bg,
                          highlightthickness=0, bd=0, takefocus=0, **kw)
-        self._w = w; self._h = h
+        # 注意: self._w / self._h は tkinter のウィジェットパス内部属性なので使わない
+        self._bw = w; self._bh = h
         self._hover = False
         self.bind("<Configure>", self._redraw)
         self.bind("<Button-1>", self._click)
@@ -709,10 +710,10 @@ class MacButton(tk.Canvas):
 
     def _redraw(self, event=None):
         self.delete("all")
-        w = event.width if event is not None else (self.winfo_width() or self._w)
-        h = event.height if event is not None else (self.winfo_height() or self._h)
-        if w <= 1: w = self._w
-        if h <= 1: h = self._h
+        w = event.width if event is not None else (self.winfo_width() or self._bw)
+        h = event.height if event is not None else (self.winfo_height() or self._bh)
+        if w <= 1: w = self._bw
+        if h <= 1: h = self._bh
         fill = self.hover_bg if self._hover else self.bg
         outline = self.border if self.border else fill
         _draw_round_rect(self, 1, 1, w-1, h-1, self.radius,
