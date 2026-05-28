@@ -228,8 +228,14 @@ def render_clipping_overlay(pb, top_pct, left_pct, zoom, px_scale=1.0):
     result = Image.alpha_composite(pb["base_rgba"], overlay).convert("RGB")
     rd = ImageDraw.Draw(result)
     GOLD = (245, 175, 60)
-    rd.rectangle([bx1, by1, bx2-1, by2-1], outline=GOLD, width=3)
-    # 角ハンドル（クリック可能領域として大きめに描画）
+    # 金枠はクロップ領域の「外側」に描く（PILは座標から内向きに描くので、
+    # 座標を W だけ外へ広げると金枠の内縁＝クロップ境界になり、
+    # 「金枠の内側＝実際にクロップされる範囲」と見た目が一致する）
+    W = 3
+    fx1 = max(0, bx1 - W); fy1 = max(0, by1 - W)
+    fx2 = min(dw-1, bx2-1 + W); fy2 = min(dh-1, by2-1 + W)
+    rd.rectangle([fx1, fy1, fx2, fy2], outline=GOLD, width=W)
+    # 角ハンドル（金枠の角に配置）
     H = 16
     for cx, cy in [(bx1, by1), (bx2-1, by1), (bx1, by2-1), (bx2-1, by2-1)]:
         rd.ellipse([cx-H//2, cy-H//2, cx+H//2, cy+H//2],
@@ -922,20 +928,28 @@ class CropAdjusterApp:
         MacButton(zoom_frame, "＋", self._scale_up, bg=PALETTE["neutral"],
                  fg=TEXT, font=self._font(12, True), padx=8, pady=4).pack(side="left", padx=2)
 
-        # ─── メイン領域（CTkScrollableFrameで完璧なスクロール）───
-        if HAS_CTK:
-            self._main_scroll = ctk.CTkScrollableFrame(
-                root, fg_color=BG,
-                scrollbar_button_color="#a0a0a0",
-                scrollbar_button_hover_color="#606060",
-                scrollbar_fg_color="transparent"
-            )
-            self._main_scroll.pack(fill="both", expand=True, padx=14, pady=12)
-            main = tk.Frame(self._main_scroll, bg=BG)
-            main.pack(fill="both", expand=True)
-        else:
-            main = tk.Frame(root, bg=BG)
-            main.pack(fill="both", expand=True, padx=14, pady=12)
+        # ─── メイン領域（tk.Canvas+Scrollbar で確実にスクロール）───
+        # CTkScrollableFrame は子ウィジェット上でホイールが効かない問題が
+        # あったため、自前のCanvasスクローラに置き換え。
+        scroll_wrap = tk.Frame(root, bg=BG)
+        scroll_wrap.pack(fill="both", expand=True, padx=14, pady=12)
+        self._main_canvas = tk.Canvas(scroll_wrap, bg=BG, highlightthickness=0,
+                                      yscrollincrement=12)
+        vsb = ttk.Scrollbar(scroll_wrap, orient="vertical",
+                            command=self._main_canvas.yview)
+        self._main_canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self._main_canvas.pack(side="left", fill="both", expand=True)
+        main = tk.Frame(self._main_canvas, bg=BG)
+        self._main_win = self._main_canvas.create_window((0, 0), window=main,
+                                                         anchor="nw")
+        def _on_inner_config(e):
+            self._main_canvas.configure(scrollregion=self._main_canvas.bbox("all"))
+        main.bind("<Configure>", _on_inner_config)
+        def _on_canvas_config(e):
+            # 横幅はキャンバスに合わせる（中央列が広がるように）
+            self._main_canvas.itemconfigure(self._main_win, width=e.width)
+        self._main_canvas.bind("<Configure>", _on_canvas_config)
 
         # 3列レイアウト（grid）
         main.grid_rowconfigure(0, weight=1)
@@ -1206,29 +1220,26 @@ class CropAdjusterApp:
         except Exception:
             pass
         if direction is not None:
-            step = direction
+            step = direction * 3
         elif IS_MAC:
             step = -1 * int(event.delta)
         else:
             step = -1 * int(event.delta / 120)
         if step == 0:
             step = -1 if getattr(event, "delta", 0) > 0 else 1
+        # 1ノッチで快適に動くよう増幅（yscrollincrement=12px × 3 ≒ 36px/ノッチ）
         try:
-            canvas.yview_scroll(step, "units")
+            canvas.yview_scroll(step * 3, "units")
         except Exception:
             pass
 
     def _setup_wheel_bindings(self):
         """メイン領域のスクロールを設定。グローバルハンドラは1回だけbind_allし、
         スクロール先は _wheel_targets でウィンドウ単位に振り分ける。"""
-        if not hasattr(self, "_main_scroll") or not HAS_CTK:
-            return
-        try:
-            inner_canvas = self._main_scroll._parent_canvas
-        except AttributeError:
+        if not hasattr(self, "_main_canvas"):
             return
         # メインウィンドウのスクロール先を登録（再構築のたびに最新Canvasへ更新）
-        self._register_wheel(self.root, inner_canvas)
+        self._register_wheel(self.root, self._main_canvas)
         # グローバルハンドラは一度だけbind（重複バインド防止）
         if not getattr(self, "_wheel_bound", False):
             self.root.bind_all("<MouseWheel>", self._wheel_scroll, add="+")
