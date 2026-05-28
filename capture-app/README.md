@@ -4,8 +4,9 @@
 書き出して、既存の `crop_adjuster`（Python / Mac・Win）でそのまま読み込めるようにする
 Swift Playgrounds アプリ。
 
-> ステータス: **開発中（v0 / スキャフォールド段階）**。
-> 実機（iPad/iPhone/Mac の Swift Playgrounds）での動作確認・調整はこれから。
+> ステータス: **v1 実装完了（全画面・撮影・書き出し）／実機テスト未**。
+> 実機（iPad/iPhone/Mac の Swift Playgrounds）でのカメラ動作・向き・枠変換の
+> 確認と微調整が必要（下記「実機調整が必要な点」）。
 
 ---
 
@@ -102,19 +103,20 @@ zoom     = base_h / (nh * H)              # 枠の高さから（1.0〜5.0でク
 capture-app/
   README.md                         ← 本ドキュメント
   ClassPhotoCapture.swiftpm/
-    Package.swift                   ← App Playground 定義（カメラ権限 purposeString 含む）
-    App.swift                       ← @main、CELL_ASPECT 定数、画面ルーティング
-    AppState.swift                  ← 状態モデル（学年/組/人数/形式/撮影配列/画面） ※未
-    StudentShot.swift               ← 1人分のデータ（番号/状態/画像/枠/寸法） ※未
-    CropMath.swift                  ← 枠→crop_overrides 逆算 ※未
-    CameraModel.swift               ← AVCaptureSession ラッパ（撮影/プレビュー層） ※未
-    CameraPreview.swift             ← AVCaptureVideoPreviewLayer の SwiftUI ラッパ ※未
-    SetupView.swift                 ← 設定画面 ※未
-    CaptureView.swift               ← 撮影画面（顔枠ガイド＋連続撮影） ※未
-    ReviewView.swift                ← 確認・書き出し ※未
-    Exporter.swift                  ← フォルダ構成＋CSV生成＋ZIP化＋共有 ※未
+    Package.swift                   ← App Playground 定義（カメラ権限 purposeString 含む）✓
+    App.swift                       ← @main、CELL_ASPECT 定数、画面ルーティング ✓
+    AppState.swift                  ← 状態モデル（学年/組/人数/形式/撮影配列/画面）✓
+    StudentShot.swift               ← 1人分のデータ（番号/状態/画像/枠）+ ImageFormat ✓
+    CropMath.swift                  ← 枠→crop_overrides 逆算 + 既定枠生成 ✓
+    CameraModel.swift               ← AVCaptureSession ラッパ（権限/撮影/枠座標変換）✓
+    CameraPreview.swift             ← AVCaptureVideoPreviewLayer の SwiftUI ラッパ ✓
+    SetupView.swift                 ← 設定画面（学年/組/人数/JPEG・HEIC）✓
+    CaptureView.swift               ← 撮影画面（顔枠ガイド＋連続撮影＋確認）✓
+    ReviewView.swift                ← 確認・書き出し（一覧グリッド＋共有）✓
+    Exporter.swift                  ← フォルダ構成＋CSV生成＋ZIP化＋ShareSheet ✓
 ```
-（※未 = これから実装。App.swift / Package.swift は作成済み）
+（✓ = 実装済み。CropMath.swift は macOS 上で構文チェック済み。
+　他は iOS 専用フレームワーク依存のため Swift Playgrounds / Xcode で要型チェック）
 
 ---
 
