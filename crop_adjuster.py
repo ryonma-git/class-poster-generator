@@ -266,8 +266,9 @@ C_NUM_FG  = (0xE8, 0x9C, 0x2A)
 C_ACCENT  = (0xE8, 0x9C, 0x2A)
 
 def render_poster_cell(cropped_img, num, name, cell_w=240):
-    # PDFと同じ比率：写真ほぼ正方形（cw:photo_h ≈ 1.02）+ ラベル下
-    photo_h = int(cell_w / 1.02)
+    # PDFと同じ写真比率（CELL_ASPECT）。ここを固定値にするとクロップ枠と
+    # ポスタープレビューで縦横比がズレて写真が伸びて見えるので必ず CELL_ASPECT を使う
+    photo_h = int(cell_w / CELL_ASPECT)
     label_h = int(cell_w * 0.19)
     cell_h = photo_h + label_h
     R = 14
@@ -2597,7 +2598,7 @@ class ClassBatchEditor:
         # 6列のグリッド表示
         self._cols = 6
         thumb_w = 140
-        thumb_h = int(thumb_w / 1.02)
+        thumb_h = int(thumb_w / CELL_ASPECT)
         for idx, n in enumerate(self.nums):
             if n not in self.image_cache: continue
             row, col = divmod(idx, self._cols)
