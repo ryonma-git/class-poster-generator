@@ -934,8 +934,10 @@ class CropAdjusterApp:
         # あったため、自前のCanvasスクローラに置き換え。
         scroll_wrap = tk.Frame(root, bg=BG)
         scroll_wrap.pack(fill="both", expand=True, padx=14, pady=12)
+        # yscrollincrement=1 で 1unit=1px に固定（マウス/トラックパッドの
+        # スクロール量をハンドラ側でpx単位に正確に制御する）
         self._main_canvas = tk.Canvas(scroll_wrap, bg=BG, highlightthickness=0,
-                                      yscrollincrement=12)
+                                      yscrollincrement=1)
         vsb = ttk.Scrollbar(scroll_wrap, orient="vertical",
                             command=self._main_canvas.yview)
         self._main_canvas.configure(yscrollcommand=vsb.set)
@@ -1201,36 +1203,59 @@ class CropAdjusterApp:
         if hasattr(self, "_wheel_targets"):
             self._wheel_targets.pop(str(toplevel), None)
 
-    def _wheel_scroll(self, event, direction=None):
-        """グローバルなホイールハンドラ。イベント発生ウィジェットの属する
-        ウィンドウに対応する canvas をスクロールする。"""
+    def _target_canvas(self, event):
+        """イベント発生ウィジェットの属するウィンドウのスクロール先Canvasを返す。
+        Listbox/Text 上は各自のスクロールに任せるため None を返す。"""
         try:
             tl = event.widget.winfo_toplevel()
         except Exception:
-            return
+            return None
         canvas = getattr(self, "_wheel_targets", {}).get(str(tl))
         if canvas is None:
-            return
-        # Listbox など独自スクロールを持つ widget 上では何もしない（自前スクロールに任せる）
+            return None
         try:
             if isinstance(event.widget, (tk.Listbox, tk.Text)):
-                return
+                return None
         except Exception:
             pass
+        return canvas
+
+    def _wheel_scroll(self, event, direction=None):
+        """マウスホイール（<MouseWheel> / Button-4,5）用。1ノッチ≒40px。"""
+        canvas = self._target_canvas(event)
+        if canvas is None:
+            return
         if direction is not None:
-            step = direction * 3
-        elif IS_MAC:
-            step = -1 * int(event.delta)
+            notches = direction
         else:
-            step = -1 * int(event.delta / 120)
-        if step == 0:
-            step = -1 if getattr(event, "delta", 0) > 0 else 1
-        # 1ノッチで快適に動くよう増幅（yscrollincrement=12px × 3 ≒ 36px/ノッチ）
+            d = getattr(event, "delta", 0)
+            if d == 0:
+                return
+            # Tk 9.0 は概ね 120 単位/ノッチ。小さい値はそのままノッチ扱い。
+            notches = -(d / 120.0) if abs(d) >= 120 else -float(d)
+        px = int(round(notches * 40)) or (40 if notches > 0 else -40)
         try:
-            canvas.yview_scroll(step * 3, "units")
+            canvas.yview_scroll(px, "units")   # yscrollincrement=1 なので px 単位
         except Exception:
             pass
-        return "break"   # 重複スクロール防止（ウィジェット個別bindとbind_allの二重発火を抑止）
+        return "break"
+
+    def _touchpad_scroll(self, event):
+        """トラックパッド（Tk 9.0 の <TouchpadScroll>）用。"""
+        canvas = self._target_canvas(event)
+        if canvas is None:
+            return
+        try:
+            dx, dy = self.root.tk.call("tk::PreciseScrollDeltas", event.delta)
+            dy = int(dy)
+        except Exception:
+            return
+        if dy:
+            try:
+                canvas.yview_scroll(-dy * 2, "units")  # px単位（係数2は感度）
+            except Exception:
+                pass
+        return "break"
 
     def _setup_wheel_bindings(self):
         """メイン領域のスクロールを設定。グローバルハンドラは1回だけbind_allし、
@@ -1246,17 +1271,26 @@ class CropAdjusterApp:
                                lambda e: self._wheel_scroll(e, -1), add="+")
             self.root.bind_all("<Button-5>",
                                lambda e: self._wheel_scroll(e, 1), add="+")
+            # Tk 9.0: トラックパッドは <TouchpadScroll> で届く
+            try:
+                self.root.bind_all("<TouchpadScroll>", self._touchpad_scroll, add="+")
+            except tk.TclError:
+                pass
             self._wheel_bound = True
         # bind_all だけだと環境によりコンテンツ上でホイールを拾えないことがあるため、
         # メイン領域の全ウィジェットに直接バインドする（確実にどこでも効く）
         self._bind_wheel_to_tree(self._main_canvas)
 
     def _bind_wheel_to_tree(self, widget):
-        """widget とその全子孫に直接マウスホイールをバインドする。"""
+        """widget とその全子孫に直接ホイール/トラックパッドをバインドする。"""
         try:
             widget.bind("<MouseWheel>", self._wheel_scroll, add="+")
             widget.bind("<Button-4>", lambda e: self._wheel_scroll(e, -1), add="+")
             widget.bind("<Button-5>", lambda e: self._wheel_scroll(e, 1), add="+")
+            try:
+                widget.bind("<TouchpadScroll>", self._touchpad_scroll, add="+")
+            except tk.TclError:
+                pass
         except Exception:
             pass
         for child in widget.winfo_children():
