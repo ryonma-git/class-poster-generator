@@ -75,11 +75,12 @@ struct CaptureView: View {
                 .stroke(gold, lineWidth: 3)
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
-            // 角ハンドル風
-            ForEach(corners(of: rect), id: \.self) { p in
+            // 角ハンドル風（CGPoint は iOS18 未満で Hashable 非対応のため index で回す）
+            let pts = corners(of: rect)
+            ForEach(pts.indices, id: \.self) { i in
                 Circle().fill(.white).frame(width: 12, height: 12)
                     .overlay(Circle().stroke(gold, lineWidth: 2))
-                    .position(x: p.x, y: p.y)
+                    .position(x: pts[i].x, y: pts[i].y)
             }
         }
         .allowsHitTesting(false)
