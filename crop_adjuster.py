@@ -481,10 +481,15 @@ def collect_photos(folder, grade, cls):
             candidates[num] = (p, full)
     return {num: path for num, (_, path) in candidates.items()}
 
+# クラス探索で無視するフォルダ（出力物などがクラスとして誤検出されるのを防ぐ）
+_SKIP_DIRS = {"output", "crop_check", "顔写真", "__pycache__", ".git"}
+
 def find_class_folder(base, grade, cls):
     """{grade}年{cls}組のフォルダを探す。複数候補があれば写真がある方を優先"""
     candidates = []
     for root, dirs, files in os.walk(base):
+        # 出力フォルダ等を探索から除外
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
         name = Path(root).name
         # 「N年M組」形式
         m = re.search(r'(\d+)\s*年\s*(\d+)\s*組', name)
@@ -507,6 +512,8 @@ def find_class_folder(base, grade, cls):
 def find_all_classes(base):
     results = []
     for root, dirs, files in os.walk(base):
+        # 出力フォルダ等を探索から除外
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
         if not any(f.lower().endswith(('.jpg','.jpeg','.png','.heic')) for f in files):
             continue
         parts = Path(os.path.relpath(root, base)).parts
