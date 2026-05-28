@@ -1211,12 +1211,9 @@ class CropAdjusterApp:
         canvas = getattr(self, "_wheel_targets", {}).get(str(tl))
         if canvas is None:
             return
-        # Listbox など独自スクロールを持つ widget 上では何もしない
+        # Listbox など独自スクロールを持つ widget 上では何もしない（自前スクロールに任せる）
         try:
-            if isinstance(event.widget, tk.Listbox):
-                return
-            # Text widget も独自スクロール
-            if isinstance(event.widget, tk.Text):
+            if isinstance(event.widget, (tk.Listbox, tk.Text)):
                 return
         except Exception:
             pass
@@ -1233,6 +1230,7 @@ class CropAdjusterApp:
             canvas.yview_scroll(step * 3, "units")
         except Exception:
             pass
+        return "break"   # 重複スクロール防止（ウィジェット個別bindとbind_allの二重発火を抑止）
 
     def _setup_wheel_bindings(self):
         """メイン領域のスクロールを設定。グローバルハンドラは1回だけbind_allし、
@@ -1249,6 +1247,20 @@ class CropAdjusterApp:
             self.root.bind_all("<Button-5>",
                                lambda e: self._wheel_scroll(e, 1), add="+")
             self._wheel_bound = True
+        # bind_all だけだと環境によりコンテンツ上でホイールを拾えないことがあるため、
+        # メイン領域の全ウィジェットに直接バインドする（確実にどこでも効く）
+        self._bind_wheel_to_tree(self._main_canvas)
+
+    def _bind_wheel_to_tree(self, widget):
+        """widget とその全子孫に直接マウスホイールをバインドする。"""
+        try:
+            widget.bind("<MouseWheel>", self._wheel_scroll, add="+")
+            widget.bind("<Button-4>", lambda e: self._wheel_scroll(e, -1), add="+")
+            widget.bind("<Button-5>", lambda e: self._wheel_scroll(e, 1), add="+")
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            self._bind_wheel_to_tree(child)
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):
