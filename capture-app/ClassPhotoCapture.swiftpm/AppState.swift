@@ -19,6 +19,10 @@ final class AppState: ObservableObject {
     @Published var studentCount: Int = 35    // 人数
     @Published var imageFormat: ImageFormat = .jpeg
 
+    // 顔枠の幅（プレビュー幅に対する割合）。小さいほど顔アップ＝高ズーム。
+    // 撮影場所が変わらなければ全員同じ枠で撮れるよう、セッションを通して保持する。
+    @Published var guideWidthFrac: CGFloat = 0.62
+
     // ── 撮影データ ──
     @Published var shots: [StudentShot] = []
     @Published var currentIndex: Int = 0     // いま撮影中のインデックス

@@ -55,23 +55,24 @@ enum CropMath {
         return CropParams(topPct: topPct, leftPct: leftPct, zoom: zoom)
     }
 
-    /// 既定の顔枠（プレビュー上の正規化矩形）。
-    /// 横中心、やや上寄り。高さは幅÷aspect。枠が画面からはみ出さないよう調整。
-    /// - previewAspect: プレビュー領域の縦横比 (w/h)。枠の見た目比率を aspect に保つため使用。
-    static func defaultGuideRect(previewAspect: CGFloat, aspect: CGFloat) -> CGRect {
-        // 枠の幅をプレビュー幅の割合で決める
-        let wFrac: CGFloat = 0.62
-        // 枠の見た目を aspect(=w/h) にするための高さ割合
-        // 画面上の実寸比 = (wFrac*previewW) / (hFrac*previewH) = aspect
-        // → hFrac = wFrac * previewAspect / aspect
+    /// 顔枠（プレビュー上の正規化矩形）。横中心・やや上寄り。
+    /// 見た目の縦横比は常に aspect を保つ（はみ出す場合は幅を縮めて維持）。
+    /// - previewAspect: プレビュー領域の縦横比 (w/h)
+    /// - widthFrac: 枠の幅（プレビュー幅に対する割合）。小さいほど顔がアップ＝高ズーム。
+    static func defaultGuideRect(previewAspect: CGFloat, aspect: CGFloat,
+                                 widthFrac: CGFloat = 0.62) -> CGRect {
+        var wFrac = min(0.95, max(0.30, widthFrac))
+        // 見た目を aspect(=w/h) にする高さ割合: hFrac = wFrac * previewAspect / aspect
         var hFrac = wFrac * previewAspect / aspect
-        // はみ出し防止
-        if hFrac > 0.80 {
-            hFrac = 0.80
+        // 縦にはみ出す場合は、アスペクト比を保ったまま幅を縮める
+        let maxH: CGFloat = 0.82
+        if hFrac > maxH {
+            hFrac = maxH
+            wFrac = hFrac * aspect / previewAspect
         }
         let x = (1.0 - wFrac) / 2.0
-        // やや上寄り（顔が枠の中心〜上に来る想定）
-        let y: CGFloat = 0.18
+        // やや上寄り（顔が枠の中心〜上に来る想定）。枠が大きいほど上に詰める。
+        let y: CGFloat = max(0.04, (1.0 - hFrac) * 0.40)
         return CGRect(x: x, y: y, width: wFrac, height: hFrac)
     }
 }

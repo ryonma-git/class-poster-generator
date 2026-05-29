@@ -33,6 +33,7 @@ struct CaptureView: View {
                 VStack {
                     topBar
                     Spacer()
+                    zoomSlider
                     bottomControls(guide: guide)
                 }
 
@@ -61,7 +62,8 @@ struct CaptureView: View {
     // ── 顔枠の矩形（プレビュー座標 px）──
     private func guideRect(in size: CGSize) -> CGRect {
         let aspect = size.width / max(1, size.height)
-        let g = CropMath.defaultGuideRect(previewAspect: aspect, aspect: CELL_ASPECT)
+        let g = CropMath.defaultGuideRect(previewAspect: aspect, aspect: CELL_ASPECT,
+                                          widthFrac: state.guideWidthFrac)
         return CGRect(x: g.origin.x * size.width,
                       y: g.origin.y * size.height,
                       width: g.size.width * size.width,
@@ -108,6 +110,36 @@ struct CaptureView: View {
         .padding(.horizontal, 16)
         .background(.black.opacity(0.4), in: Capsule())
         .padding(.top, 12)
+    }
+
+    // ── ズーム（クロップ枠の大きさ）スライダー ──
+    // 右へ動かすほど枠が小さく＝顔アップ（高ズーム）。場所が同じなら全員同じ枠で撮れる。
+    private var zoomBinding: Binding<Double> {
+        Binding(
+            get: { Double(0.90 - state.guideWidthFrac) },      // 0(引き)〜0.55(アップ)
+            set: { state.guideWidthFrac = CGFloat(0.90 - $0) }
+        )
+    }
+
+    private var zoomSlider: some View {
+        VStack(spacing: 3) {
+            Text("クロップ枠のズーム（右ほど顔アップ）")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.85))
+            HStack(spacing: 12) {
+                Image(systemName: "minus.magnifyingglass")
+                    .foregroundStyle(.white)
+                Slider(value: zoomBinding, in: 0...0.55)
+                    .tint(gold)
+                Image(systemName: "plus.magnifyingglass")
+                    .foregroundStyle(.white)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 24)
+        .padding(.bottom, 6)
     }
 
     // ── 下部コントロール ──
