@@ -37,6 +37,28 @@ struct CaptureView: View {
                     bottomControls(guide: guide)
                 }
 
+                // 右上: 顔ガイド ON/OFF トグル
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button {
+                            state.showFaceGuide.toggle()
+                        } label: {
+                            Label(state.showFaceGuide ? "顔ガイド ON" : "顔ガイド OFF",
+                                  systemImage: state.showFaceGuide
+                                      ? "person.fill.viewfinder" : "person.crop.rectangle")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(.black.opacity(0.4), in: Capsule())
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.top, 14)
+                .padding(.trailing, 16)
+
                 // 確認オーバーレイ
                 if let img = confirmImage {
                     confirmOverlay(image: img, crop: confirmCrop, previewSize: geo.size)
@@ -73,6 +95,12 @@ struct CaptureView: View {
     @ViewBuilder
     private func goldFrame(rect: CGRect) -> some View {
         ZStack {
+            // 顔位置ガイド（枠内に薄く・ON/OFF可）
+            if state.showFaceGuide {
+                FaceGuideOverlay()
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+            }
             RoundedRectangle(cornerRadius: 6)
                 .stroke(gold, lineWidth: 3)
                 .frame(width: rect.width, height: rect.height)

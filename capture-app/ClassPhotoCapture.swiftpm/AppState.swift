@@ -23,6 +23,9 @@ final class AppState: ObservableObject {
     // 撮影場所が変わらなければ全員同じ枠で撮れるよう、セッションを通して保持する。
     @Published var guideWidthFrac: CGFloat = 0.62
 
+    // 顔位置ガイド（枠内に薄く表示する頭・肩のシルエット）の表示ON/OFF
+    @Published var showFaceGuide: Bool = true
+
     // ── 撮影データ ──
     @Published var shots: [StudentShot] = []
     @Published var currentIndex: Int = 0     // いま撮影中のインデックス
