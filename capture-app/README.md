@@ -4,9 +4,13 @@
 書き出して、既存の `crop_adjuster`（Python / Mac・Win）でそのまま読み込めるようにする
 Swift Playgrounds アプリ。
 
-> ステータス: **v1 実装完了（全画面・撮影・書き出し）／実機テスト未**。
-> 実機（iPad/iPhone/Mac の Swift Playgrounds）でのカメラ動作・向き・枠変換の
-> 確認と微調整が必要（下記「実機調整が必要な点」）。
+> ステータス: **v1 実装完了＋Xcode/シミュレータ検証済み／実機カメラ撮影のみ未検証**。
+> Xcode 26.2 / iOS 26.3 シミュレータ(iPad)で、ビルド・起動・全画面遷移・
+> カメラ権限プロンプト・CropMath逆算（crop_adjusterと往復一致）を確認済み。
+> シミュレータにカメラが無いため、**実際の撮影だけ**は実機(学校iPad等)で要確認。
+> 直近で「クロップ枠のズームスライダー」を追加（撮影距離に応じた顔の大きさ調整）。
+>
+> ▼ 次にやる予定（未実装・優先度高） → 末尾「今後の実装予定(TODO)」参照
 
 ---
 
@@ -134,14 +138,8 @@ capture-app/
   ZIP（`NSFileCoordinator` の `.forUploading` で .zip 生成）→ `UIActivityViewController`
   で AirDrop / Files / Google Drive へ共有。
 - **権限**: `Package.swift` の `.camera(purposeString:)` で NSCameraUsageDescription を付与。
-
-### 未解決・実機調整が必要な点（次エージェントへの申し送り）
-1. プレビュー枠→撮影画像の座標変換は端末向き・aspectFill 設定で要検証。
-2. 縦持ち撮影時の W/H とポスター比率(横長1.13)の整合（縦写真をどう扱うか）。
-   - 案: 縦持ちでも顔枠は 1.13（横長寄り）で出し、保存は全体。crop_adjuster 側で吸収。
-3. HEIC の crop_adjuster 取り込み: Python 側は `.heic` も収集対象だが、
-   pillow-heif 依存。JPEG をデフォルト推奨にするのが無難。
-4. Swift Playgrounds 上でのカメラ動作（iPad 実機推奨。Mac版は Mac カメラ）。
+- **ズーム**: 撮影画面下部のスライダーで顔枠サイズを調整（`AppState.guideWidthFrac`、
+  `CropMath.defaultGuideRect(widthFrac:)`）。小さい枠＝顔アップ＝高ズーム。
 
 ---
 
@@ -158,7 +156,53 @@ capture-app/
 
 1. `capture-app/ClassPhotoCapture.swiftpm` を Swift Playgrounds（iPad/Mac）で開く
    （または Xcode で開く）。
-2. 未実装ファイル（上記 ※未）を順に実装。CropMath → CameraModel/Preview →
-   各 View → Exporter の順が依存的に進めやすい。
-3. crop_adjuster 連携は本READMEの「連携仕様」を厳守（命名・CSV・CropMath）。
-</content>
+2. crop_adjuster 連携は本READMEの「連携仕様」を厳守（命名・CSV・CropMath）。
+
+### Xcode でのビルド/実行メモ
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` を設定して CLI 実行可。
+- スキーム名は Xcode が Package.swift の name から自動生成するため、
+  `xcodebuild -list` で確認してから `-scheme` 指定（"ClassPhotoCapture" になる）。
+- シミュレータ実行（署名不要）:
+  `xcodebuild build -scheme ClassPhotoCapture -destination 'platform=iOS Simulator,name=iPad (A16)' -derivedDataPath <DD>`
+  → `simctl install <dev> <app>` → `simctl launch <dev> com.ryonma.classphotocapture`
+  → `simctl io <dev> screenshot out.png`（画面ロック中でも可）
+- 実機/Mac Catalyst の署名は **Personal Team では Mac Catalyst が失敗**しがち。
+  実機(iPhone/iPad)接続 or iPad の Swift Playgrounds が確実。
+- `Package.swift` の `teamIdentifier` は **空のままにする**（各自の Apple ID で署名。
+  Xcode で開くと自動で team が書き込まれるが、その変更はコミットしない）。
+
+---
+
+## 今後の実装予定（TODO）
+
+優先度順。次の担当者はここから着手。
+
+1. **【優先】確認画面の撮り直しフロー改善**（ユーザー要望 2026-05-29）
+   - 現状: ReviewView でセルをタップすると **即座に撮影画面へ戻る**（`jumpTo`）。
+   - 望ましい挙動: セルをタップ → **まず大きいプレビュー（その生徒の撮影済み写真＋
+     クロップ枠）を表示** → そこから「**撮り直す**」ボタンで撮影画面へ、「**閉じる/戻る**」
+     でプレビューを閉じる、という2段階にする。
+   - 実装案: ReviewView に `@State private var previewing: StudentShot?` を持たせ、
+     `.sheet(item:)` か全画面オーバーレイで「写真＋枠＋[撮り直す][閉じる]」を表示。
+     `撮り直す` で `state.currentIndex = idx; state.screen = .capture`。
+   - 既存 `jumpTo(_:)` をこのプレビュー表示に置き換える。
+
+2. 実機カメラ撮影の動作確認・調整（学校iPad等）
+   - プレビュー枠→撮影画像の座標変換（`metadataOutputRectConverted`）が
+     端末向き・aspectFill で正しいか実機で検証。
+   - 縦持ち時の W/H とポスター比率(1.13)の整合。
+   - 撮影 → 書き出し(ZIP) → crop_adjuster で読み込み、までを実機データで通し確認。
+
+3. （任意）撮影済み枚数の自動保存・再開（アプリ終了しても途中から続けられる）。
+4. （任意）名簿(名前)対応・一覧シート出力など。
+
+---
+
+## 実機調整が必要な点（技術メモ）
+1. プレビュー枠→撮影画像の座標変換は端末向き・aspectFill 設定で要検証。
+2. 縦持ち撮影時の W/H とポスター比率(横長1.13)の整合（縦写真をどう扱うか）。
+   - 案: 縦持ちでも顔枠は 1.13（横長寄り）で出し、保存は全体。crop_adjuster 側で吸収。
+3. HEIC の crop_adjuster 取り込み: Python 側は `.heic` も収集対象だが pillow-heif 依存。
+   JPEG をデフォルト推奨にするのが無難。
+4. Swift Playgrounds 上でのカメラ動作（iPad 実機推奨。Mac版は Mac カメラ）。
+
