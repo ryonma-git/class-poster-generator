@@ -1,0 +1,5 @@
+# Xcode が生成するユーザーデータ（スキーム・ビルド設定のローカル状態）
+.swiftpm/
+# ビルド成果物
+.build/
+DerivedData/
