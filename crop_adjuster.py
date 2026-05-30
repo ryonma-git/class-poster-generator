@@ -3262,6 +3262,7 @@ class PosterWizard:
         self.v_cols  = tk.IntVar(value=6)
         self.v_rows  = tk.IntVar(value=7)
         self.v_use_teacher = tk.BooleanVar(value=False)
+        self.v_teacher_photo = tk.BooleanVar(value=False)
         self.teachers_path = None  # CSV path
 
         self.step = 0
@@ -3468,6 +3469,16 @@ class PosterWizard:
                       padx=20, pady=14
                      ).pack(anchor="w")
 
+        # 担任写真ありモード（Phase 6b）
+        tk.Checkbutton(cb_frame, text="担任セルに写真を入れる（撮影アプリで担任を撮影している場合）",
+                      variable=self.v_teacher_photo,
+                      bg=PALETTE["panel"], fg=PALETTE["text_dim"],
+                      activebackground=PALETTE["panel"],
+                      selectcolor=PALETTE["accent_bg"],
+                      font=(system_font_family(), 11),
+                      padx=40, pady=4
+                     ).pack(anchor="w")
+
         # 説明
         info = tk.Frame(c, bg=PALETTE["accent_bg"])
         info.pack(fill="x", pady=20)
@@ -3587,6 +3598,8 @@ class PosterWizard:
             args += ["--cols", str(self.v_cols.get()), "--rows", str(self.v_rows.get())]
         if self.v_use_teacher.get() and self.teachers_path:
             args += ["--teachers", self.teachers_path]
+        if self.v_use_teacher.get() and self.v_teacher_photo.get():
+            args += ["--teacher-photo"]
         # ウィザードを閉じてからPDF生成（進捗ダイアログが新たにmodalを取る）
         self.app._modal_close()
         self.root.destroy()

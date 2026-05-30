@@ -508,22 +508,110 @@ def make_student_cell(img_path, cw, ch, lh, num, name, override=None, zoom_multi
 # ════════════════════════════════════════════
 #  担任セル描画
 # ════════════════════════════════════════════
-def make_teacher_cell(cw, ch, lh, name):
-    R    = 18
-    cell = Image.new("RGBA", (cw,ch), (0,0,0,0))
-    cell.paste(Image.new("RGBA",(cw,ch), C_TCH_BG+(255,)), mask=rmask((cw,ch),R))
+def make_teacher_cell(cw, ch, lh, name, img_path=None, override=None,
+                      zoom_multiplier=1.0, top_offset=0, left_offset=0):
+    """担任セル。
+    - img_path 未指定: 旧来の文字のみ（青地＋「担任」＋名前＋下バー）
+    - img_path 指定: 児童セルと同形（写真上＋ラベル下）、ただし全体は teacherBg 色。
+      Phase 6a で固めた iOS のレイアウトを移植。
+    """
+    R = 18
+    cell = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+
+    # 写真あり分岐
+    if img_path and os.path.exists(img_path):
+        ph = ch - lh
+        # ── 全体カード（担任色） ──
+        cell.paste(Image.new("RGBA", (cw, ch), C_TCH_BG + (255,)),
+                   mask=rmask((cw, ch), R))
+
+        # ── 写真 ──
+        try:
+            pil = fix_exif_rotation(Image.open(img_path))
+            photo = smart_crop(pil, cw, ph, override=override,
+                               zoom_multiplier=zoom_multiplier,
+                               top_offset=top_offset, left_offset=left_offset)
+        except Exception:
+            photo = make_placeholder(cw, ph)
+
+        pa = photo.convert("RGBA")
+        pa.putalpha(rmask((cw, ph), R, top=True, bot=False))
+        cell.paste(pa, (0, 0), pa)
+
+        # ── ラベル（teacherBg のまま） ──
+        lbl = Image.new("RGBA", (cw, lh), (0, 0, 0, 0))
+        lbl.paste(Image.new("RGBA", (cw, lh), C_TCH_BG + (255,)),
+                  mask=rmask((cw, lh), R, top=False, bot=True))
+        ld = ImageDraw.Draw(lbl)
+        pad = int(cw * 0.05)
+        cy = lh // 2
+
+        # 「担」マーク（アクセント色、左）
+        mark = "担"
+        f_mark = get_font(int(lh * 0.32))
+        mb = ld.textbbox((0, 0), mark, font=f_mark)
+        mw = mb[2] - mb[0]
+        ld.text((pad, cy), mark, font=f_mark, fill=C_ACCENT + (255,), anchor="lm")
+
+        # 名前（右、白）
+        avail = cw - mw - pad * 3
+        _, f_nm = fit_font(ld, name, min(avail, int(cw * 0.80)), int(lh * 0.55))
+        ld.text((pad + mw + pad, cy), name, font=f_nm,
+                fill=(255, 255, 255, 255), anchor="lm")
+
+        cell.paste(lbl, (0, ph), lbl)
+        # ラベル上端のアクセント線（少し太め）
+        ImageDraw.Draw(cell).line([(0, ph), (cw, ph)], fill=C_ACCENT + (220,), width=3)
+        return cell
+
+    # 写真なし — 旧来のレイアウト
+    cell.paste(Image.new("RGBA", (cw, ch), C_TCH_BG + (255,)), mask=rmask((cw, ch), R))
     d = ImageDraw.Draw(cell)
-    d.text((cw//2, int(ch*0.35)), "担　任",
-           font=get_font(int(ch*0.11)), fill=C_ACCENT+(220,), anchor="mm")
-    _, fn = fit_font(d, name, int(cw*0.84), int(ch*0.12))
-    d.text((cw//2, int(ch*0.56)), name, font=fn, fill=(255,255,255,255), anchor="mm")
-    d.rectangle([int(cw*0.2),ch-7,int(cw*0.8),ch-3], fill=C_ACCENT+(200,))
+    d.text((cw // 2, int(ch * 0.35)), "担　任",
+           font=get_font(int(ch * 0.11)), fill=C_ACCENT + (220,), anchor="mm")
+    _, fn = fit_font(d, name, int(cw * 0.84), int(ch * 0.12))
+    d.text((cw // 2, int(ch * 0.56)), name, font=fn,
+           fill=(255, 255, 255, 255), anchor="mm")
+    d.rectangle([int(cw * 0.2), ch - 7, int(cw * 0.8), ch - 3],
+                fill=C_ACCENT + (200,))
     return cell
 
 # ════════════════════════════════════════════
 #  ポスター生成（1クラス）
 # ════════════════════════════════════════════
-def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A1', zoom_multiplier=1.0, top_offset=0, left_offset=0):
+def _resolve_teacher_photo(folder, grade, cls, photo_hint=None):
+    """担任写真のフルパスを返す。
+    - photo_hint がフルパス相当なら最優先で利用
+    - そうでなければ {folder}/担任/{g}{c}T01.{jpg,heic,JPG,HEIC} を順にトライ
+      （iOS の撮影アプリが書き出すファイル名規約）
+    """
+    if photo_hint:
+        if os.path.isabs(photo_hint) and os.path.exists(photo_hint):
+            return photo_hint
+        # folder からの相対も試す
+        cand = os.path.join(folder, photo_hint)
+        if os.path.exists(cand):
+            return cand
+        cand = os.path.join(folder, '担任', os.path.basename(photo_hint))
+        if os.path.exists(cand):
+            return cand
+    # フォールバック自動検出
+    teacher_dir = os.path.join(folder, '担任')
+    if not os.path.isdir(teacher_dir):
+        return None
+    stem = f"{grade}{cls}T01"
+    for ext in ('jpg', 'jpeg', 'heic', 'JPG', 'JPEG', 'HEIC'):
+        p = os.path.join(teacher_dir, f"{stem}.{ext}")
+        if os.path.exists(p):
+            return p
+    # T01 が無ければ 担任/ 内の最初の画像
+    for name in sorted(os.listdir(teacher_dir)):
+        if name.lower().endswith(('.jpg', '.jpeg', '.heic', '.png')):
+            return os.path.join(teacher_dir, name)
+    return None
+
+
+def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A1', zoom_multiplier=1.0, top_offset=0, left_offset=0, teacher_photo=None, use_teacher_photo=False):
     print(f"\n▶ {grade}年{cls}組  [{Path(folder).name}]")
     nums  = sorted(roster.keys())
     total = len(nums)
@@ -577,16 +665,32 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
     d.text((pw-mx, cy_), f"全{total}名",
            font=get_font(int(hh*0.24)), fill=C_ACCENT, anchor="rm")
 
+    # 担任写真の解決（use_teacher_photo=True かつ photo が見つかれば写真ありセル）
+    resolved_teacher_photo = None
+    if use_teacher_photo and teacher:
+        resolved_teacher_photo = _resolve_teacher_photo(folder, grade, cls, teacher_photo)
+        if resolved_teacher_photo:
+            print(f"  担任写真: {Path(resolved_teacher_photo).name}")
+        else:
+            print(f"  担任写真: 見つからず（文字のみセルにフォールバック）")
+
     # グリッド
     gt    = mt + hh + int(4*P)
     cells = ([("t", teacher)] if teacher else []) + [("s", n) for n in nums]
+
+    # 担任写真の override は overrides[(grade, cls, 'T01')] で持つ（Phase 6b 拡張）
+    teacher_override = (overrides or {}).get((grade, cls, 'T01'))
 
     for idx, (kind, val) in enumerate(cells):
         col = idx % use_cols; row = idx // use_cols
         x   = mx + col*(cw+gc)
         y   = gt + row*(ch+gr)
         if kind == "t":
-            ci = make_teacher_cell(cw, ch, lh, val)
+            ci = make_teacher_cell(cw, ch, lh, val,
+                                   img_path=resolved_teacher_photo,
+                                   override=teacher_override,
+                                   zoom_multiplier=zoom_multiplier,
+                                   top_offset=top_offset, left_offset=left_offset)
         else:
             ov = (overrides or {}).get((grade, cls, val))
             ci = make_student_cell(photos.get(val), cw, ch, lh, val,
@@ -816,6 +920,8 @@ def main():
                     help="紙サイズ。class モード時のデフォルトは A1。grade モードはモード名側で決まる")
     ap.add_argument("--teachers", default=None,
                     help="担任情報CSV（grade,cls,name,photo の4列）")
+    ap.add_argument("--teacher-photo", action="store_true",
+                    help="担任セルに写真を入れる（Phase 6b）。{folder}/担任/{g}{c}T01.* を自動検出。")
     ap.add_argument("--zoom-multiplier", type=float, default=1.0,
                     help="全体ズーム倍率（1.0=標準、1.3=30%%アップ、0.8=20%%引き）")
     ap.add_argument("--top-offset", type=float, default=0,
@@ -903,11 +1009,14 @@ def main():
         roster = master.get((args.grade, args.cls), {})
         if not roster:
             print(f"⚠ {args.grade}年{args.cls}組: 名簿なし"); return
-        teacher = teachers_data.get((args.grade, args.cls), {}).get('name') or args.teacher
+        teacher_info = teachers_data.get((args.grade, args.cls), {})
+        teacher = teacher_info.get('name') or args.teacher
         generate_poster(args.grade, args.cls, folder, args.out,
                         roster, teacher, overrides=overrides,
                         cols=args.cols, rows=args.rows, paper=paper,
-                        zoom_multiplier=args.zoom_multiplier, top_offset=args.top_offset, left_offset=args.left_offset)
+                        zoom_multiplier=args.zoom_multiplier, top_offset=args.top_offset, left_offset=args.left_offset,
+                        teacher_photo=teacher_info.get('photo'),
+                        use_teacher_photo=args.teacher_photo)
     else:
         # 全クラス（クラス単位）
         classes = find_all_classes(args.base)
@@ -916,10 +1025,13 @@ def main():
             roster = master.get((g, c), {})
             if not roster:
                 print(f"\n⚠ {g}年{c}組: 名簿なし（スキップ）"); continue
-            teacher = teachers_data.get((g, c), {}).get('name') or args.teacher
+            teacher_info = teachers_data.get((g, c), {})
+            teacher = teacher_info.get('name') or args.teacher
             generate_poster(g, c, folder, args.out, roster, teacher,
                           overrides=overrides, cols=args.cols, rows=args.rows,
-                          paper=paper, zoom_multiplier=args.zoom_multiplier, top_offset=args.top_offset, left_offset=args.left_offset)
+                          paper=paper, zoom_multiplier=args.zoom_multiplier, top_offset=args.top_offset, left_offset=args.left_offset,
+                          teacher_photo=teacher_info.get('photo'),
+                          use_teacher_photo=args.teacher_photo)
 
     print("\n完了 ✅")
 

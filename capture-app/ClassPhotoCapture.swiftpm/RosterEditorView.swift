@@ -55,6 +55,12 @@ struct RosterEditorView: View {
                             Label("写真から取り込み（OCR）", systemImage: "doc.text.viewfinder")
                         }
                         Divider()
+                        Button {
+                            generateAllFurigana()
+                        } label: {
+                            Label("空欄のふりがなを自動生成", systemImage: "wand.and.stars")
+                        }
+                        Divider()
                         Button(role: .destructive) {
                             clearAllNames()
                         } label: {
@@ -183,6 +189,15 @@ struct RosterEditorView: View {
         focused = order[safe: i - 1] ?? order.last
     }
 
+    /// 漢字が入っていてふりがなが空欄の Member すべてに対して自動生成
+    private func generateAllFurigana() {
+        for m in state.roster.students + state.roster.teachers {
+            guard !m.name.isEmpty, m.furigana.isEmpty else { continue }
+            let g = FuriganaGenerator.generate(m.name)
+            if !g.isEmpty { m.furigana = g }
+        }
+    }
+
     private func clearAllNames() {
         for m in state.roster.students {
             m.name = ""; m.furigana = ""
@@ -210,11 +225,24 @@ private struct MemberRow: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 56, alignment: .leading)
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("ふりがな（例: たなか たろう）",
-                              text: $member.furigana)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focusedFurigana, equals: furiganaField)
+                    HStack(spacing: 6) {
+                        TextField("ふりがな（例: たなか たろう）",
+                                  text: $member.furigana)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .focused($focusedFurigana, equals: furiganaField)
+                        if !member.name.isEmpty {
+                            Button {
+                                let generated = FuriganaGenerator.generate(member.name)
+                                if !generated.isEmpty { member.furigana = generated }
+                            } label: {
+                                Image(systemName: "wand.and.stars")
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.purple)
+                            .accessibilityLabel("漢字からふりがなを自動生成")
+                        }
+                    }
                     Divider()
                     TextField("漢字（例: 田中 太郎）",
                               text: $member.name)

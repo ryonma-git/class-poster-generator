@@ -46,7 +46,7 @@ struct CaptureView: View {
                 }
 
                 // 番号変更時の大きいスプラッシュ表示（デフォルト枠のちょっと上）
-                Text("\(state.currentShot?.displayLabel(grade: state.grade, cls: state.cls) ?? "") を撮影")
+                Text("\(state.currentShot?.displayLabel(group: state.group) ?? "") を撮影")
                     .font(.system(size: 30, weight: .heavy))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 22).padding(.vertical, 11)
@@ -176,7 +176,7 @@ struct CaptureView: View {
     // ── 上部バー ──
     private var topBar: some View {
         VStack(spacing: 4) {
-            Text("\(state.currentShot?.displayLabel(grade: state.grade, cls: state.cls) ?? "") を撮影")
+            Text("\(state.currentShot?.displayLabel(group: state.group) ?? "") を撮影")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
             Text("済 \(state.capturedCount) / 欠席 \(state.absentCount) / 全 \(state.shots.count)")
