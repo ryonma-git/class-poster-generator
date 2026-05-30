@@ -12,15 +12,27 @@ import pandas as pd
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageFont
-from reportlab.lib.pagesizes import A2, A1
+from reportlab.lib.pagesizes import A0, A1, A2, A3, A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 # ════════════════════════════════════════════
 #  レイアウト
 # ════════════════════════════════════════════
-A2_W, A2_H = A2
+A0_W, A0_H = A0
 A1_W, A1_H = A1
+A2_W, A2_H = A2
+A3_W, A3_H = A3
+A4_W, A4_H = A4
+
+# 用紙サイズ辞書（pt単位、縦置き）— A0〜A4 を一元管理
+PAPER_SIZES = {
+    "A0": A0,
+    "A1": A1,
+    "A2": A2,
+    "A3": A3,
+    "A4": A4,
+}
 MM         = 72 / 25.4
 MARGIN_X   = 15 * MM
 MARGIN_TOP = 18 * MM
@@ -511,7 +523,7 @@ def make_teacher_cell(cw, ch, lh, name):
 # ════════════════════════════════════════════
 #  ポスター生成（1クラス）
 # ════════════════════════════════════════════
-def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A2', zoom_multiplier=1.0, top_offset=0, left_offset=0):
+def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides=None, cols=None, rows=None, paper='A1', zoom_multiplier=1.0, top_offset=0, left_offset=0):
     print(f"\n▶ {grade}年{cls}組  [{Path(folder).name}]")
     nums  = sorted(roster.keys())
     total = len(nums)
@@ -531,13 +543,12 @@ def generate_poster(grade, cls, folder, out_dir, roster, teacher=None, overrides
     final_rows = max(auto_rows, use_rows)
 
     # ── ピクセル計算（150dpi）──
-    DPI=150; P=DPI/72.0
-    if paper == "A1":
-        pw, ph = int(A1_W*P), int(A1_H*P)
-        page_w_pt, page_h_pt = A1_W, A1_H
-    else:
-        pw, ph = int(A2_W*P), int(A2_H*P)
-        page_w_pt, page_h_pt = A2_W, A2_H
+    # 大判（A0/A1）は150dpi、小判（A3/A4）はファイルサイズ抑制のため200dpi相当に。
+    # 用紙が小さいほど絶対ピクセルは小さくなるので印刷品質は維持できる。
+    DPI = 150 if paper in ("A0", "A1", "A2") else 200
+    P = DPI / 72.0
+    page_w_pt, page_h_pt = PAPER_SIZES.get(paper, A1)
+    pw, ph = int(page_w_pt * P), int(page_h_pt * P)
     mx = int(MARGIN_X*P);   mt = int(MARGIN_TOP*P)
     mb = int(MARGIN_BOT*P); hh = int(HEADER_H*P)
     gc = int(GAP_COL*P);    gr = int(GAP_ROW*P)
@@ -800,9 +811,9 @@ def main():
     ap.add_argument("--rows", type=int, default=None,
                     help="行数（省略時は人数に応じて自動）")
     ap.add_argument("--mode", choices=["class", "grade-a2", "grade-a1"], default="class",
-                    help="出力モード: class=クラスごとA2、grade-a2=学年ごとA2縦長、grade-a1=学年ごとA1縦長")
-    ap.add_argument("--paper", choices=["A2", "A1"], default=None,
-                    help="紙サイズを明示指定（省略時はモードから決定）")
+                    help="出力モード: class=クラスごと（紙サイズは --paper で指定）、grade-a2/a1=学年ロール紙")
+    ap.add_argument("--paper", choices=["A0", "A1", "A2", "A3", "A4"], default=None,
+                    help="紙サイズ。class モード時のデフォルトは A1。grade モードはモード名側で決まる")
     ap.add_argument("--teachers", default=None,
                     help="担任情報CSV（grade,cls,name,photo の4列）")
     ap.add_argument("--zoom-multiplier", type=float, default=1.0,
@@ -859,9 +870,16 @@ def main():
         print(f"  デザイン設定: デフォルト使用 ({e})")
 
     # 紙サイズ判定
+    # class モードのデフォルトは A1（2026年度より変更）。
+    # grade モードはモード名から決まる（grade-a1 → A1幅、grade-a2 → A2幅）。
     paper = args.paper
     if paper is None:
-        paper = "A1" if args.mode == "grade-a1" else "A2"
+        if args.mode == "grade-a1":
+            paper = "A1"
+        elif args.mode == "grade-a2":
+            paper = "A2"
+        else:
+            paper = "A1"  # class モードのデフォルト
 
     if args.mode in ("grade-a2", "grade-a1"):
         # 学年単位

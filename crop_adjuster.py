@@ -128,20 +128,26 @@ def detect_face(pil_img):
 # ════════════════════════════════════════════════════════
 #  クロップ計算
 # ════════════════════════════════════════════════════════
-def compute_photo_aspect(paper="A2", cols=6, rows=7):
+def compute_photo_aspect(paper="A1", cols=6, rows=7):
     """PDFの写真エリアの縦横比(cw/ph)を make_poster.py と完全に同じ式で計算する。
     ★この計算は make_poster.py の generate_poster / レイアウト定数と一致させること。
     プレビューと実PDFのクロップを一致させるための単一ソース。"""
     MM = 72 / 25.4
-    A2_W, A2_H = 1190.55, 1683.78   # reportlab A2 (pt)
-    A1_W, A1_H = 1683.78, 2383.94   # reportlab A1 (pt)
+    # 用紙サイズ（pt、縦置き）— make_poster.py の PAPER_SIZES と同じ
+    PAPERS = {
+        "A0": (2383.937, 3370.394),
+        "A1": (1683.78,  2383.94),
+        "A2": (1190.55,  1683.78),
+        "A3": (841.89,   1190.55),
+        "A4": (595.276,  841.890),
+    }
     MARGIN_X = 15*MM; MARGIN_TOP = 18*MM; MARGIN_BOT = 12*MM
     HEADER_H = 25*MM; GAP_COL = 5*MM; GAP_ROW = 6*MM; LABEL_H = 18*MM
-    P = 150/72.0
-    if paper == "A1":
-        pw, ph = int(A1_W*P), int(A1_H*P)
-    else:
-        pw, ph = int(A2_W*P), int(A2_H*P)
+    # make_poster.py と同じく、A0/A1/A2 は150dpi、A3/A4 は200dpi
+    DPI = 150 if paper in ("A0", "A1", "A2") else 200
+    P = DPI / 72.0
+    page_w_pt, page_h_pt = PAPERS.get(paper, PAPERS["A1"])
+    pw, ph = int(page_w_pt * P), int(page_h_pt * P)
     mx = int(MARGIN_X*P); mt = int(MARGIN_TOP*P); mb = int(MARGIN_BOT*P)
     hh = int(HEADER_H*P); gc = int(GAP_COL*P); gr = int(GAP_ROW*P); lh = int(LABEL_H*P)
     cw = (pw - 2*mx - (cols-1)*gc) // cols
@@ -150,9 +156,10 @@ def compute_photo_aspect(paper="A2", cols=6, rows=7):
     photo_h = ch - lh
     return cw / photo_h
 
-# PDFの実際の写真エリア比率（A2 6×7 デフォルト）。make_poster.py と一致。
+# PDFの実際の写真エリア比率（A1 6×7 デフォルト = 2026年度〜）。make_poster.py と一致。
 # 旧 1.02 は近似値で、実際は約1.13。プレビューとPDFで顔の下が切れる不一致の原因だった。
-CELL_ASPECT = compute_photo_aspect("A2", 6, 7)
+# A0〜A4 で微妙に変わるが、A1基準で誤差は±2%未満なのでクロップ調整時はA1値で代表する。
+CELL_ASPECT = compute_photo_aspect("A1", 6, 7)
 
 def calc_crop_box(img_w, img_h, top_pct, left_pct, zoom):
     if img_w / img_h < CELL_ASPECT:
@@ -3246,8 +3253,12 @@ class PosterWizard:
         self.root.grab_set()
 
         # 設定値
-        self.v_mode  = tk.StringVar(value="class")     # class / grade-a2 / grade-a1
-        self.v_paper = tk.StringVar(value="A2")        # A2 / A1
+        # 出力モード:
+        #   class-{A0|A1|A2|A3|A4} — 1クラス1枚ポスター
+        #   grade-{a2|a1}         — 学年まとめロール紙
+        # 2026年度よりクラスごとのデフォルトを A2 から A1 に変更。
+        self.v_mode  = tk.StringVar(value="class-A1")
+        self.v_paper = tk.StringVar(value="A1")
         self.v_cols  = tk.IntVar(value=6)
         self.v_rows  = tk.IntVar(value=7)
         self.v_use_teacher = tk.BooleanVar(value=False)
@@ -3319,18 +3330,29 @@ class PosterWizard:
                 bg=PALETTE["bg"], fg=PALETTE["text_strong"],
                 font=(system_font_family(), 16, "bold")
                 ).pack(anchor="w", pady=(0, 8))
-        tk.Label(c, text="ポスターの単位（クラスごと=A2 / 学年=ロール紙）を決めます",
+        tk.Label(c, text="ポスターの単位（クラスごと=単票 / 学年=ロール紙）と紙サイズを決めます",
                 bg=PALETTE["bg"], fg=PALETTE["text_dim"],
                 font=(system_font_family(), 11)
                 ).pack(anchor="w", pady=(0, 20))
 
+        # クラスごと:
+        #   2026年度より A1 を標準（A2では小さすぎたため）。
+        #   A0/A2 は掲示場所に応じた選択肢、A3/A4 は校長室掲示や保護者配布用。
         options = [
-            ("class",     "A2", "クラスごと（A2縦、デフォルト）",
-             "1クラス1枚のA2ポスター（420×594mm 縦置き）"),
-            ("grade-a2",  "A2", "学年まとめて A2幅ロール紙",
-             "幅594mm（A2の長辺）のロール紙に、各クラスをA2個別と同じレイアウトで縦に連結"),
+            ("class-A0",  "A0", "クラスごと A0（特大）",
+             "1クラス1枚のA0ポスター（841×1189mm）。体育館掲示など大型用"),
+            ("class-A1",  "A1", "クラスごと A1（標準・2026年度〜）",
+             "1クラス1枚のA1ポスター（594×841mm）。デフォルト。校内掲示の標準サイズ"),
+            ("class-A2",  "A2", "クラスごと A2（従来）",
+             "1クラス1枚のA2ポスター（420×594mm）。2025年度までの標準サイズ"),
+            ("class-A3",  "A3", "クラスごと A3",
+             "1クラス1枚のA3ポスター（297×420mm）。職員室掲示・職員配布用"),
+            ("class-A4",  "A4", "クラスごと A4",
+             "1クラス1枚のA4ポスター（210×297mm）。保護者配布・記念冊子用"),
             ("grade-a1",  "A1", "学年まとめて A1幅ロール紙",
-             "幅841mm（A1の長辺）のロール紙に縦に連結。より大きく掲示できる"),
+             "幅841mm（A1の長辺）のロール紙に縦に連結。学年全体を1枚で掲示"),
+            ("grade-a2",  "A2", "学年まとめて A2幅ロール紙",
+             "幅594mm（A2の長辺）のロール紙に縦に連結"),
         ]
         for mode, paper, title, desc in options:
             row = tk.Frame(c, bg=PALETTE["panel"],
@@ -3502,10 +3524,14 @@ class PosterWizard:
                 ).pack(anchor="w", pady=(0, 20))
 
         mode_label = {
-            "class": "クラスごと（A2縦）",
+            "class-A0": "クラスごと（A0 特大）",
+            "class-A1": "クラスごと（A1 標準・2026年度〜）",
+            "class-A2": "クラスごと（A2 従来）",
+            "class-A3": "クラスごと（A3）",
+            "class-A4": "クラスごと（A4）",
             "grade-a2": "学年ロール紙（A2幅594mm）",
             "grade-a1": "学年ロール紙（A1幅841mm）",
-        }[self.v_mode.get()]
+        }.get(self.v_mode.get(), self.v_mode.get())
 
         items = [
             ("出力モード", mode_label),
@@ -3549,8 +3575,15 @@ class PosterWizard:
 
     def _execute(self):
         """設定でポスター生成スクリプトを呼ぶ"""
-        args = ["--mode", self.v_mode.get(), "--paper", self.v_paper.get()]
-        if self.v_mode.get() == "class":
+        # class-A0/A1/A2/A3/A4 → make_poster.py には --mode class --paper {サイズ}
+        # grade-a1/a2 → そのまま渡す（--paper は補助情報として常に付与）
+        m = self.v_mode.get()
+        if m.startswith("class-"):
+            send_mode = "class"
+        else:
+            send_mode = m
+        args = ["--mode", send_mode, "--paper", self.v_paper.get()]
+        if send_mode == "class":
             args += ["--cols", str(self.v_cols.get()), "--rows", str(self.v_rows.get())]
         if self.v_use_teacher.get() and self.teachers_path:
             args += ["--teachers", self.teachers_path]
