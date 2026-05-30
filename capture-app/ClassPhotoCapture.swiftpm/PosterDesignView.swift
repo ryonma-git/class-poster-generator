@@ -21,6 +21,9 @@ struct PosterDesignView: View {
     @State private var error: String? = nil
     @State private var showShare = false
     @State private var presetIndex: Int = 0
+    @State private var showDetailColors = false      // 詳細カラー編集を開いているか
+    @State private var designConfigURL: URL? = nil   // 配色 JSON 書き出し
+    @State private var showDesignShare = false       // 配色 JSON 用共有シート
 
     /// 紙サイズに応じた推奨レイアウトを最初に当てておく
     init() {
@@ -36,6 +39,10 @@ struct PosterDesignView: View {
             Form {
                 paperSection
                 designSection
+                if showDetailColors {
+                    detailColorsSection
+                }
+                designExportSection
                 layoutSection
                 teacherSection
                 generateSection
@@ -56,6 +63,9 @@ struct PosterDesignView: View {
             } message: { Text(error ?? "") }
             .sheet(isPresented: $showShare) {
                 if let url = generatedURL { ShareSheet(items: [url]) }
+            }
+            .sheet(isPresented: $showDesignShare) {
+                if let url = designConfigURL { ShareSheet(items: [url]) }
             }
             .onChange(of: config.paper) { new in
                 // 紙サイズを変えたら推奨レイアウトに揃える
@@ -103,9 +113,103 @@ struct PosterDesignView: View {
                 colorChip(config.design.background, label: "背景", border: true)
             }
             .padding(.top, 4)
-            Text("詳細な色のカスタマイズは Phase 4 で実装します。")
-                .font(.caption2)
+
+            Toggle("詳細にカスタマイズ", isOn: $showDetailColors.animation())
+                .font(.subheadline)
+        }
+    }
+
+    /// 9項目を個別に編集できる詳細パネル
+    private var detailColorsSection: some View {
+        Section {
+            colorEditorRow(label: "ヘッダー帯（主）",
+                           subtitle: "ページ上部の濃い帯",
+                           keyPath: \.headerBgHex)
+            colorEditorRow(label: "ヘッダー帯（左サブ）",
+                           subtitle: "左側の少し明るい帯",
+                           keyPath: \.headerSubHex)
+            colorEditorRow(label: "アクセント",
+                           subtitle: "ヘッダー下線・番号・装飾線",
+                           keyPath: \.accentHex)
+            colorEditorRow(label: "背景",
+                           subtitle: "ページ全体の地",
+                           keyPath: \.backgroundHex)
+            colorEditorRow(label: "カード背景",
+                           subtitle: "児童セルの背景（写真の周囲）",
+                           keyPath: \.cardBgHex)
+            colorEditorRow(label: "ラベル背景",
+                           subtitle: "氏名表示帯の地",
+                           keyPath: \.labelBgHex)
+            colorEditorRow(label: "ラベル文字",
+                           subtitle: "氏名の文字色（通常は白）",
+                           keyPath: \.labelFgHex)
+            colorEditorRow(label: "番号",
+                           subtitle: "出席番号の文字色",
+                           keyPath: \.numberFgHex)
+            colorEditorRow(label: "担任セル背景",
+                           subtitle: "担任の地",
+                           keyPath: \.teacherBgHex)
+
+            Button {
+                config.design = .default
+                presetIndex = 0
+                clearGenerated()
+            } label: {
+                Label("「標準」プリセットに戻す", systemImage: "arrow.uturn.backward")
+                    .font(.subheadline)
+            }
+        } header: {
+            Text("詳細カラー")
+        } footer: {
+            Text("変更は次回の生成時に反映されます。本体の make_poster.py と同じ design_config.json を作って共有できます（下のセクション）。")
+                .font(.caption)
+        }
+    }
+
+    /// 1行分の編集UI（ColorPicker＋hex表示）
+    private func colorEditorRow(label: String,
+                                subtitle: String,
+                                keyPath: WritableKeyPath<PosterDesign, UInt32>) -> some View {
+        let binding = Binding<Color>(
+            get: { Color(hex: config.design[keyPath: keyPath]) },
+            set: { newColor in
+                config.design[keyPath: keyPath] = newColor.hexUInt32()
+                clearGenerated()
+            }
+        )
+        return HStack(spacing: 12) {
+            ColorPicker(selection: binding, supportsOpacity: false) {
+                EmptyView()
+            }
+            .labelsHidden()
+            .frame(width: 44)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.subheadline)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(Color.hexString(config.design[keyPath: keyPath]))
+                .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// 配色を本体互換 JSON で書き出し
+    private var designExportSection: some View {
+        Section {
+            Button {
+                exportDesignConfig()
+            } label: {
+                Label("配色を本体（PC）に書き出す（design_config.json）",
+                      systemImage: "arrow.up.doc")
+            }
+        } footer: {
+            Text("書き出した design_config.json を crop_adjuster の作業フォルダに置くと、本体側のポスター出力もこの配色になります。")
+                .font(.caption)
         }
     }
 
@@ -208,6 +312,23 @@ struct PosterDesignView: View {
             try? FileManager.default.removeItem(at: url)
         }
         generatedURL = nil
+    }
+
+    private func exportDesignConfig() {
+        let json = config.design.designConfigJSON
+        do {
+            let data = try JSONSerialization.data(
+                withJSONObject: json,
+                options: [.prettyPrinted, .sortedKeys])
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("design_config.json")
+            try? FileManager.default.removeItem(at: url)
+            try data.write(to: url)
+            designConfigURL = url
+            showDesignShare = true
+        } catch {
+            self.error = "配色の書き出しに失敗: \(error)"
+        }
     }
 
     private func generate() {

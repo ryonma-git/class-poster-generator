@@ -207,3 +207,43 @@ extension PosterDesign {
     var headerSubUI:  UIColor { UIColor(hex: headerSubHex) }
     var teacherBgUI:  UIColor { UIColor(hex: teacherBgHex) }
 }
+
+// MARK: - Color/Hex 相互変換（ColorPicker 用）
+
+extension Color {
+    /// SwiftUI Color → 0xRRGGBB の UInt32（α は無視）
+    func hexUInt32() -> UInt32 {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(self).getRed(&r, green: &g, blue: &b, alpha: &a)
+        let R = UInt32(max(0, min(255, round(r * 255))))
+        let G = UInt32(max(0, min(255, round(g * 255))))
+        let B = UInt32(max(0, min(255, round(b * 255))))
+        return (R << 16) | (G << 8) | B
+    }
+    /// 0xRRGGBB の UInt32 → "#RRGGBB" 文字列
+    static func hexString(_ v: UInt32) -> String {
+        String(format: "#%06X", v & 0xFFFFFF)
+    }
+}
+
+// MARK: - design_config.json 互換書き出し
+//
+// 本体 (make_poster.py の load_design_config) が読めるキーで JSON 化。
+// 配色をエクスポートして、本体側の出力も同じデザインに揃えられる。
+
+extension PosterDesign {
+    /// design_config.json として書ける辞書。キーは本体と同名。
+    var designConfigJSON: [String: String] {
+        [
+            "background":  Color.hexString(backgroundHex),
+            "card_bg":     Color.hexString(cardBgHex),
+            "label_bg":    Color.hexString(labelBgHex),
+            "label_fg":    Color.hexString(labelFgHex),
+            "number_fg":   Color.hexString(numberFgHex),
+            "accent":      Color.hexString(accentHex),
+            "header_bg":   Color.hexString(headerBgHex),
+            "header_sub":  Color.hexString(headerSubHex),
+            "teacher_bg":  Color.hexString(teacherBgHex),
+        ]
+    }
+}
