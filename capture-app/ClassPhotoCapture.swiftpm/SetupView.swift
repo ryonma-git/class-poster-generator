@@ -14,7 +14,7 @@ struct SetupView: View {
                     Stepper("学年: \(state.grade) 年", value: $state.grade,
                             in: state.gradeRange)
                     Stepper("組: \(state.cls) 組", value: $state.cls,
-                            in: state.clsRange)
+                            in: state.clsNumberRange)
                     Stepper("人数: \(state.studentCount) 人", value: $state.studentCount,
                             in: state.countRange)
                 }

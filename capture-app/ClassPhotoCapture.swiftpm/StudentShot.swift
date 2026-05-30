@@ -2,19 +2,22 @@ import SwiftUI
 import CoreGraphics
 
 // ════════════════════════════════════════════════════════════════
-//  StudentShot — 生徒1人分の撮影データ
+//  StudentShot — 撮影対象1人分のデータ（児童・メンバー・担任など）
+//
+//  学校モード／集団モード両対応。ファイル名・表示ラベルは GroupConfig
+//  から引いて生成するため、本ファイルにモードごとの分岐は持たない。
 // ════════════════════════════════════════════════════════════════
 
 enum ShotStatus {
     case pending    // 未撮影
     case captured   // 撮影済み
-    case absent     // 欠席
+    case absent     // 欠席／不在
 }
 
 /// 撮影対象の種別
 enum ShotKind {
-    case student    // 児童・生徒
-    case teacher    // 担任（複数可）
+    case student    // 児童・生徒・メンバー
+    case teacher    // 担任・リーダー
 }
 
 /// 撮影画像フォーマット
@@ -41,21 +44,68 @@ final class StudentShot: Identifiable, ObservableObject {
         self.number = number
     }
 
-    /// 画面表示用ラベル（例: "1年1組 5番" / "1年1組 担任2"）
-    func displayLabel(grade: Int, cls: Int) -> String {
+    /// 画面表示用ラベル — GroupConfig から生成
+    /// 学校モード: "1年1組 5番" / "1年1組 担任2"
+    /// 集団モード: "職員室 5番" / "職員室 リーダー2"（個人ラベルがあればそれを優先）
+    func displayLabel(group: GroupConfig, customLabel: String? = nil) -> String {
+        let groupName = group.displayName
+        if let label = customLabel, !label.isEmpty {
+            return "\(groupName) \(label)"
+        }
         switch kind {
-        case .student: return "\(grade)年\(cls)組 \(number)番"
-        case .teacher: return "\(grade)年\(cls)組 担任\(number)"
+        case .student: return "\(groupName) \(number)番"
+        case .teacher:
+            switch group.mode {
+            case .school: return "\(groupName) 担任\(number)"
+            case .custom: return "\(groupName) リーダー\(number)"
+            }
         }
     }
 
-    /// ファイル名 stem を返す。
-    /// - 児童: "{grade}{cls}{num:02}"（crop_adjuster 互換）
-    /// - 担任: "{grade}{cls}T{num:02}"（'T' 区切りで crop_adjuster の生徒検出と衝突しない）
-    func fileStem(grade: Int, cls: Int) -> String {
-        switch kind {
-        case .student: return String(format: "%d%d%02d", grade, cls, number)
-        case .teacher: return String(format: "%d%dT%02d", grade, cls, number)
+    /// ファイル名 stem を返す（GroupConfig から派生）
+    /// 学校モード（数字組）:
+    ///   児童: "{grade}{cls}{num:02}" 例 4年2組5番 → "4205"
+    ///   担任: "{grade}{cls}T{num:02}" 例 4年2組担任1 → "42T01"
+    /// 学校モード（ABC組）:
+    ///   児童: "{grade}{ClsKey}{num:02}" 例 4年A組5番 → "4A05"
+    ///   担任: "{grade}{ClsKey}T{num:02}" 例 4年A組担任1 → "4AT01"
+    /// 集団モード:
+    ///   児童: "{groupID}_{num:02}"
+    ///   担任: "{groupID}_T{num:02}"
+    func fileStem(group: GroupConfig) -> String {
+        switch group.mode {
+        case .school:
+            let g = group.grade
+            let ck = group.classLabel.fileKey
+            switch kind {
+            case .student: return String(format: "%d%@%02d", g, ck, number)
+            case .teacher: return String(format: "%d%@T%02d", g, ck, number)
+            }
+        case .custom:
+            let id = group.fileSafeID
+            switch kind {
+            case .student: return String(format: "%@_%02d", id, number)
+            case .teacher: return String(format: "%@_T%02d", id, number)
+            }
         }
+    }
+
+    // MARK: - 旧APIの後方互換シム（既存呼び出し箇所の段階移行用）
+
+    /// 旧 API: 数字組前提の表示ラベル
+    func displayLabel(grade: Int, cls: Int) -> String {
+        var g = GroupConfig()
+        g.mode = .school
+        g.grade = grade
+        g.classLabel = .number(cls)
+        return displayLabel(group: g)
+    }
+    /// 旧 API: 数字組前提のファイル名 stem
+    func fileStem(grade: Int, cls: Int) -> String {
+        var g = GroupConfig()
+        g.mode = .school
+        g.grade = grade
+        g.classLabel = .number(cls)
+        return fileStem(group: g)
     }
 }

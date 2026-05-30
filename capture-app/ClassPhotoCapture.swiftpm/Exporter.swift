@@ -18,17 +18,32 @@ import ImageIO
 // ════════════════════════════════════════════════════════════════
 
 /// manifest.json のスキーマ
+///
+/// v1: 学校×数字組のみ（grade, cls: Int）
+/// v2: 任意ラベル方式に対応（group: GroupMeta）。v1 フィールドは互換のため残置。
 struct CaptureManifest: Codable {
     let format: String       // 識別子: "ClassPhotoCapture"
-    let version: Int         // スキーマバージョン
-    let grade: Int
-    let cls: Int
+    let version: Int         // スキーマバージョン（=2）
+    let grade: Int           // 学校モード時の学年。互換用に常に出力。
+    let cls: Int             // 数字組のとき組番号。それ以外は 0。
+    let group: GroupMeta?    // v2: 集団設定の完全形
     let studentCount: Int
     let teacherCount: Int
     let imageFormat: String  // "jpg" / "heic"
     let exportedAt: String   // ISO8601
     let students: [StudentEntry]
     let teachers: [TeacherEntry]
+    let nameStyle: String?   // v2: "furigana" or "kanji"
+
+    /// 集団設定（学校 or 集団モード）。
+    struct GroupMeta: Codable {
+        let mode: String             // "school" or "custom"
+        let grade: Int?              // school モードのみ
+        let classLabelKind: String?  // school: "number" or "letter"
+        let classLabelValue: String? // school: "1" or "A" など（表示は組をつけずに）
+        let groupName: String?       // custom モードの集団名
+        let groupSubtitle: String?
+    }
 
     struct StudentEntry: Codable {
         let number: Int
@@ -37,32 +52,68 @@ struct CaptureManifest: Codable {
         let topPct: Double?
         let leftPct: Double?
         let zoom: Double?
+        // v2: 名簿情報（あれば。空文字は省略）
+        let name: String?
+        let furigana: String?
+        let customLabel: String?
     }
     struct TeacherEntry: Codable {
         let number: Int
         let file: String             // 相対パス
+        let name: String?            // v2
+        let furigana: String?        // v2
+        let customLabel: String?     // v2
     }
 }
 
 enum ExportError: Error { case noData, zipFailed }
 
 enum Exporter {
-    /// 撮影データを ZIP に書き出し、その URL を返す。
+    /// 旧 API（学校×数字組専用）。GroupConfig を組み立てて新APIへ委譲。
     static func makeZip(grade: Int, cls: Int,
                         shots: [StudentShot],
                         format: ImageFormat) throws -> URL {
+        var g = GroupConfig()
+        g.mode = .school
+        g.grade = grade
+        g.classLabel = .number(cls)
+        return try makeZip(group: g, roster: Roster(), shots: shots, format: format)
+    }
+
+    /// 撮影データを ZIP（.cpcap）に書き出し、その URL を返す。
+    /// 学校モードでは crop_adjuster.py が直接読めるフォルダ構造で出力。
+    /// 集団モードでは `{groupID}/` 配下に出力（crop_adjuster は manifest を読む）。
+    static func makeZip(group: GroupConfig,
+                        roster: Roster,
+                        shots: [StudentShot],
+                        format: ImageFormat) throws -> URL {
         let fm = FileManager.default
-        let root = fm.temporaryDirectory
-            .appendingPathComponent("撮影_\(grade)年\(cls)組_\(Int(Date().timeIntervalSince1970))",
-                                    isDirectory: true)
-        // 既存を掃除
+
+        // ── ルートディレクトリ名 ──
+        let stamp = Int(Date().timeIntervalSince1970)
+        let rootName: String
+        switch group.mode {
+        case .school:
+            rootName = "撮影_\(group.grade)年\(group.classLabel.display)_\(stamp)"
+        case .custom:
+            rootName = "撮影_\(group.fileSafeID)_\(stamp)"
+        }
+        let root = fm.temporaryDirectory.appendingPathComponent(rootName, isDirectory: true)
         try? fm.removeItem(at: root)
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
 
-        // 画像フォルダ:  {g}年/{g}年{c}組/
-        let classDir = root
-            .appendingPathComponent("\(grade)年", isDirectory: true)
-            .appendingPathComponent("\(grade)年\(cls)組", isDirectory: true)
+        // ── 画像フォルダ ──
+        // 学校モード: "{grade}年/{grade}年{classLabel}/"（crop_adjuster 直読み互換）
+        // 集団モード: "{groupID}/"
+        let classDir: URL
+        switch group.mode {
+        case .school:
+            classDir = root
+                .appendingPathComponent("\(group.grade)年", isDirectory: true)
+                .appendingPathComponent("\(group.grade)年\(group.classLabel.display)", isDirectory: true)
+        case .custom:
+            classDir = root.appendingPathComponent(group.fileSafeID, isDirectory: true)
+        }
         try fm.createDirectory(at: classDir, withIntermediateDirectories: true)
 
         // 担任フォルダ（担任ショットがある場合のみ作成）
@@ -77,7 +128,12 @@ enum Exporter {
         try fm.createDirectory(at: cropDir, withIntermediateDirectories: true)
 
         // CSV ヘッダ（BOM付きUTF-8、crop_adjuster と一致）
+        // ※集団モードは crop_adjuster で扱わないので CSV は空ヘッダのみ。
         var csv = "\u{FEFF}grade,cls,num,top_pct,left_pct,zoom\n"
+
+        // 互換用：旧 API 互換の grade/cls Int を取り出す
+        let legacyGrade = group.mode == .school ? group.grade : 0
+        let legacyCls = group.legacyClsInt
 
         // manifest 用のエントリ
         var studentEntries: [CaptureManifest.StudentEntry] = []
@@ -87,16 +143,43 @@ enum Exporter {
         let students = shots.filter { $0.kind == .student }.sorted(by: { $0.number < $1.number })
         let teachers = shots.filter { $0.kind == .teacher }.sorted(by: { $0.number < $1.number })
 
+        // 名簿から名前情報を引く（roster が空でもクラッシュしない）
+        func nameInfo(role: MemberRole, number: Int) -> (name: String?, furigana: String?, customLabel: String?) {
+            let m: Member? = (role == .student)
+                ? roster.studentByNumber(number)
+                : roster.teacherByNumber(number)
+            guard let m else { return (nil, nil, nil) }
+            let n = m.name.isEmpty ? nil : m.name
+            let f = m.furigana.isEmpty ? nil : m.furigana
+            return (n, f, m.customLabel)
+        }
+
+        // 相対パス組み立て（学校モードは直読み互換、集団モードはフラット）
+        func relPath(stem: String, ext: String, sub: String? = nil) -> String {
+            switch group.mode {
+            case .school:
+                let base = "\(group.grade)年/\(group.grade)年\(group.classLabel.display)"
+                if let sub { return "\(base)/\(sub)/\(stem).\(ext)" }
+                return "\(base)/\(stem).\(ext)"
+            case .custom:
+                let base = group.fileSafeID
+                if let sub { return "\(base)/\(sub)/\(stem).\(ext)" }
+                return "\(base)/\(stem).\(ext)"
+            }
+        }
+
         for shot in students {
+            let info = nameInfo(role: .student, number: shot.number)
             switch shot.status {
             case .captured:
                 guard let img = shot.image else {
                     studentEntries.append(.init(number: shot.number, status: "pending",
-                        file: nil, topPct: nil, leftPct: nil, zoom: nil))
+                        file: nil, topPct: nil, leftPct: nil, zoom: nil,
+                        name: info.name, furigana: info.furigana, customLabel: info.customLabel))
                     continue
                 }
-                let stem = shot.fileStem(grade: grade, cls: cls)
-                let relPath = "\(grade)年/\(grade)年\(cls)組/\(stem).\(format.fileExtension)"
+                let stem = shot.fileStem(group: group)
+                let rel = relPath(stem: stem, ext: format.fileExtension)
                 let fileURL = classDir.appendingPathComponent("\(stem).\(format.fileExtension)")
                 let data: Data? = (format == .heic)
                     ? (img.heicData(quality: 0.92) ?? img.jpegData(compressionQuality: 0.92))
@@ -113,47 +196,76 @@ enum Exporter {
                     let p = CropMath.params(forNormalizedRect: crop,
                                             imageW: w, imageH: h, aspect: Double(CELL_ASPECT))
                     topPct = p.topPct; leftPct = p.leftPct; zoom = p.zoom
-                    csv += String(format: "%d,%d,%d,%.4f,%.4f,%.4f\n",
-                                  grade, cls, shot.number, p.topPct, p.leftPct, p.zoom)
+                    // CSV は学校×数字組のときだけ crop_adjuster が利用するので、その形でのみ出力。
+                    if group.mode == .school, case .number = group.classLabel {
+                        csv += String(format: "%d,%d,%d,%.4f,%.4f,%.4f\n",
+                                      legacyGrade, legacyCls, shot.number, p.topPct, p.leftPct, p.zoom)
+                    }
                 }
                 studentEntries.append(.init(number: shot.number, status: "captured",
-                    file: relPath, topPct: topPct, leftPct: leftPct, zoom: zoom))
+                    file: rel, topPct: topPct, leftPct: leftPct, zoom: zoom,
+                    name: info.name, furigana: info.furigana, customLabel: info.customLabel))
             case .absent:
                 studentEntries.append(.init(number: shot.number, status: "absent",
-                    file: nil, topPct: nil, leftPct: nil, zoom: nil))
+                    file: nil, topPct: nil, leftPct: nil, zoom: nil,
+                    name: info.name, furigana: info.furigana, customLabel: info.customLabel))
             case .pending:
                 studentEntries.append(.init(number: shot.number, status: "pending",
-                    file: nil, topPct: nil, leftPct: nil, zoom: nil))
+                    file: nil, topPct: nil, leftPct: nil, zoom: nil,
+                    name: info.name, furigana: info.furigana, customLabel: info.customLabel))
             }
         }
 
         for shot in teachers where shot.status == .captured {
             guard let img = shot.image else { continue }
-            let stem = shot.fileStem(grade: grade, cls: cls)
-            let relPath = "\(grade)年/\(grade)年\(cls)組/担任/\(stem).\(format.fileExtension)"
+            let info = nameInfo(role: .teacher, number: shot.number)
+            let stem = shot.fileStem(group: group)
+            let rel = relPath(stem: stem, ext: format.fileExtension, sub: "担任")
             let fileURL = teacherDir.appendingPathComponent("\(stem).\(format.fileExtension)")
             let data: Data? = (format == .heic)
                 ? (img.heicData(quality: 0.92) ?? img.jpegData(compressionQuality: 0.92))
                 : img.jpegData(compressionQuality: 0.92)
             guard let data else { continue }
             try data.write(to: fileURL)
-            teacherEntries.append(.init(number: shot.number, file: relPath))
+            teacherEntries.append(.init(number: shot.number, file: rel,
+                name: info.name, furigana: info.furigana, customLabel: info.customLabel))
         }
 
         try csv.data(using: .utf8)?.write(to: cropDir.appendingPathComponent("crop_overrides.csv"))
 
         // ── manifest.json を書き出し ──
         let iso = ISO8601DateFormatter()
+        let meta: CaptureManifest.GroupMeta
+        switch group.mode {
+        case .school:
+            let kind: String
+            let value: String
+            switch group.classLabel {
+            case .number(let n): kind = "number"; value = "\(n)"
+            case .letter(let s): kind = "letter"; value = s
+            }
+            meta = .init(mode: "school", grade: group.grade,
+                         classLabelKind: kind, classLabelValue: value,
+                         groupName: nil, groupSubtitle: nil)
+        case .custom:
+            meta = .init(mode: "custom", grade: nil,
+                         classLabelKind: nil, classLabelValue: nil,
+                         groupName: group.groupName,
+                         groupSubtitle: group.groupSubtitle.isEmpty ? nil : group.groupSubtitle)
+        }
+
         let manifest = CaptureManifest(
             format: "ClassPhotoCapture",
-            version: 1,
-            grade: grade, cls: cls,
+            version: 2,
+            grade: legacyGrade, cls: legacyCls,
+            group: meta,
             studentCount: students.count,
             teacherCount: teachers.count,
             imageFormat: format.fileExtension,
             exportedAt: iso.string(from: Date()),
             students: studentEntries,
-            teachers: teacherEntries
+            teachers: teacherEntries,
+            nameStyle: roster.nameStyle.rawValue
         )
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
