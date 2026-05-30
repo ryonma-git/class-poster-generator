@@ -38,7 +38,8 @@ let package = Package(
                 .portraitUpsideDown(.when(deviceFamilies: [.pad]))
             ],
             capabilities: [
-                .camera(purposeString: "クラスの個人写真を撮影するためにカメラを使用します。")
+                .camera(purposeString: "クラスの個人写真を撮影するためにカメラを使用します。"),
+                .photoLibraryAdd(purposeString: "撮影した写真を「写真」アプリに書き出すために使用します。")
             ]
         )
     ],

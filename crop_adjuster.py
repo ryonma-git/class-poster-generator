@@ -1785,8 +1785,8 @@ class CropAdjusterApp:
         import zipfile, json, tempfile, shutil
 
         path = filedialog.askopenfilename(
-            title="撮影アプリのデータ（ZIP）を選択",
-            filetypes=[("撮影データ", "*.zip"), ("All files", "*.*")]
+            title="撮影アプリのデータを選択（.cpcap / .zip）",
+            filetypes=[("撮影データ", "*.cpcap *.zip"), ("All files", "*.*")]
         )
         if not path:
             return

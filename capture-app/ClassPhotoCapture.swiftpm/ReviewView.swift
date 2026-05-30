@@ -13,6 +13,11 @@ struct ReviewView: View {
     @State private var isExporting = false
     // セルをタップしたときに表示するプレビュー（写真＋枠＋撮り直しボタン）
     @State private var previewing: StudentShot? = nil
+    // 「写真を書き出し」のモード選択ダイアログ
+    @State private var showPhotoModeDialog = false
+    @State private var isSavingPhotos = false
+    @State private var photoProgress: (Int, Int) = (0, 0)
+    @State private var photoResult: String? = nil
 
     private let cols = [GridItem(.adaptive(minimum: 96), spacing: 10)]
 
@@ -66,26 +71,22 @@ struct ReviewView: View {
         }
     }
 
-    /// 画面下部の書き出し案内＋大きいボタン（crop_adjuster との連携を明示）
+    /// 画面下部の書き出し案内＋ボタン群
     private var exportBanner: some View {
-        VStack(spacing: 10) {
-            Divider().padding(.bottom, 4)
+        VStack(spacing: 12) {
+            Divider().padding(.bottom, 2)
             Label("撮影が終わったら、ここから書き出します",
                   systemImage: "square.and.arrow.up.on.square")
                 .font(.headline)
-            Text("ZIPファイルとして AirDrop / Files / Google Drive / メール等に送信できます。\nMac・Windows の crop_adjuster で「📥 撮影データを取り込み」から開くと、写真・クロップ情報・クラス情報がそのまま入ります。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
 
+            // crop_adjuster 用パッケージ書き出し（独自拡張子 .cpcap）
             Button {
                 export()
             } label: {
                 HStack {
                     if isExporting { ProgressView() }
                     else { Image(systemName: "shippingbox.and.arrow.backward") }
-                    Text(isExporting ? "書き出し中…" : "crop_adjuster に書き出す（ZIP）")
+                    Text(isExporting ? "書き出し中…" : "crop_adjuster に書き出す（.cpcap）")
                         .fontWeight(.semibold)
                 }
                 .padding(.vertical, 6)
@@ -93,7 +94,29 @@ struct ReviewView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(isExporting || state.capturedCount == 0)
+            .disabled(isExporting || isSavingPhotos || state.capturedCount == 0)
+
+            // 写真ライブラリへの書き出し
+            Button {
+                showPhotoModeDialog = true
+            } label: {
+                HStack {
+                    if isSavingPhotos { ProgressView() }
+                    else { Image(systemName: "photo.on.rectangle.angled") }
+                    if isSavingPhotos {
+                        Text("保存中… \(photoProgress.0)/\(photoProgress.1)")
+                            .fontWeight(.semibold)
+                    } else {
+                        Text("写真を書き出し（「写真」アプリへ）")
+                            .fontWeight(.semibold)
+                    }
+                }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(isExporting || isSavingPhotos || state.capturedCount == 0)
 
             if state.capturedCount == 0 {
                 Text("※ 撮影済みが1人もありません")
@@ -104,6 +127,20 @@ struct ReviewView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
         .padding(.top, 10)
+        .confirmationDialog("写真を「写真」アプリに書き出します",
+                            isPresented: $showPhotoModeDialog,
+                            titleVisibility: .visible) {
+            Button("クロップ済みの写真を書き出し") { savePhotos(mode: .cropped) }
+            Button("クロップ前のオリジナルを書き出し") { savePhotos(mode: .original) }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("撮影済み \(state.capturedCount) 件を書き出します")
+        }
+        .alert("写真の書き出し", isPresented: .constant(photoResult != nil)) {
+            Button("OK") { photoResult = nil }
+        } message: {
+            Text(photoResult ?? "")
+        }
     }
 
     private var summary: some View {
@@ -156,6 +193,30 @@ struct ReviewView: View {
         if let idx = state.shots.firstIndex(where: { $0.id == shot.id }) {
             state.currentIndex = idx
             state.screen = .capture
+        }
+    }
+
+    private func savePhotos(mode: PhotoExportMode) {
+        guard !isSavingPhotos, !isExporting else { return }
+        PhotoExporter.requestAddPermission { granted in
+            guard granted else {
+                photoResult = "「写真」アプリへの追加が許可されていません。設定で許可してください。"
+                return
+            }
+            isSavingPhotos = true
+            photoProgress = (0, 0)
+            PhotoExporter.saveAll(shots: state.shots, mode: mode,
+                                  progress: { done, total in
+                photoProgress = (done, total)
+            }, completion: { ok, ng in
+                isSavingPhotos = false
+                let modeLabel = (mode == .cropped) ? "クロップ済み" : "オリジナル"
+                if ng == 0 {
+                    photoResult = "「写真」アプリへ\(modeLabel) \(ok) 件 を書き出しました。"
+                } else {
+                    photoResult = "「写真」アプリへ \(modeLabel) \(ok) 件 を書き出しました。\(ng) 件は失敗しました。"
+                }
+            })
         }
     }
 

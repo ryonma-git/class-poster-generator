@@ -160,8 +160,13 @@ enum Exporter {
         let manifestData = try enc.encode(manifest)
         try manifestData.write(to: root.appendingPathComponent("manifest.json"))
 
-        // ZIP 化（NSFileCoordinator の forUploading でディレクトリを .zip 化）
-        return try zipDirectory(root)
+        // ZIP 化（NSFileCoordinator の forUploading でディレクトリを .zip 化）→
+        // ユーザー向けには独自拡張子 .cpcap に改名（中身はそのまま ZIP）。
+        let zipURL = try zipDirectory(root)
+        let cpcapURL = zipURL.deletingPathExtension().appendingPathExtension("cpcap")
+        try? fm.removeItem(at: cpcapURL)
+        try fm.moveItem(at: zipURL, to: cpcapURL)
+        return cpcapURL
     }
 
     /// ディレクトリを ZIP 化して URL を返す
