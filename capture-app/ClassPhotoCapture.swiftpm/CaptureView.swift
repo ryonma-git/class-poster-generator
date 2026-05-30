@@ -17,6 +17,8 @@ struct CaptureView: View {
     @State private var splashOpacity: Double = 0
     // ピンチズーム開始時の倍率
     @State private var pinchStartZoom: CGFloat = 1.0
+    // クロップ調整ビュー表示フラグ
+    @State private var editingCrop = false
 
     private let gold = Color(red: 245/255, green: 175/255, blue: 60/255)
 
@@ -44,7 +46,7 @@ struct CaptureView: View {
                 }
 
                 // 番号変更時の大きいスプラッシュ表示（デフォルト枠のちょっと上）
-                Text("\(state.grade)年\(state.cls)組 \(state.currentShot?.number ?? 0)番 を撮影")
+                Text("\(state.currentShot?.displayLabel(grade: state.grade, cls: state.cls) ?? "") を撮影")
                     .font(.system(size: 30, weight: .heavy))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 22).padding(.vertical, 11)
@@ -100,6 +102,13 @@ struct CaptureView: View {
         .onDisappear { camera.stopRunning() }
         .onChange(of: state.currentIndex) { _ in
             showSplash()
+        }
+        .sheet(isPresented: $editingCrop) {
+            if let img = confirmImage {
+                CropEditorView(image: img, crop: $confirmCrop) {
+                    editingCrop = false
+                }
+            }
         }
     }
 
@@ -166,7 +175,7 @@ struct CaptureView: View {
     // ── 上部バー ──
     private var topBar: some View {
         VStack(spacing: 4) {
-            Text("\(state.grade)年 \(state.cls)組  \(state.currentShot?.number ?? 0)番 を撮影")
+            Text("\(state.currentShot?.displayLabel(grade: state.grade, cls: state.cls) ?? "") を撮影")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
             Text("済 \(state.capturedCount) / 欠席 \(state.absentCount) / 全 \(state.shots.count)")
@@ -283,6 +292,17 @@ struct CaptureView: View {
                     .resizable().scaledToFit()
                     .frame(maxHeight: previewSize.height * 0.6)
                     .overlay(cropOverlay(crop: crop))
+                // クロップ微調整ボタン（任意・通常は使わないが必要な時に）
+                Button {
+                    editingCrop = true
+                } label: {
+                    Label("クロップを調整（拡大・上下左右）", systemImage: "crop")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered).controlSize(.regular).tint(.white)
+                .padding(.horizontal, 30)
+
                 HStack(spacing: 20) {
                     Button(role: .destructive) {
                         retake()

@@ -19,6 +19,17 @@ struct SetupView: View {
                             in: state.countRange)
                 }
 
+                Section {
+                    Stepper("担任: \(state.teacherCount) 人",
+                            value: $state.teacherCount,
+                            in: state.teacherRange)
+                    Text(state.teacherCount == 0
+                         ? "担任の撮影なし"
+                         : "児童の後に担任 \(state.teacherCount) 人分を続けて撮影します")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: { Text("担任") }
+
                 Section("画像形式") {
                     Picker("保存形式", selection: $state.imageFormat) {
                         ForEach(ImageFormat.allCases) { f in
@@ -43,7 +54,7 @@ struct SetupView: View {
                     } label: {
                         HStack {
                             Spacer()
-                            Label("撮影をはじめる（全 \(state.studentCount) 人）",
+                            Label("撮影をはじめる（児童\(state.studentCount)＋担任\(state.teacherCount)）",
                                   systemImage: "camera.fill")
                                 .font(.headline)
                             Spacer()

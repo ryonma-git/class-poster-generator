@@ -32,6 +32,13 @@ enum Exporter {
             .appendingPathComponent("\(grade)年\(cls)組", isDirectory: true)
         try fm.createDirectory(at: classDir, withIntermediateDirectories: true)
 
+        // 担任フォルダ（担任ショットがある場合のみ作成）
+        let teacherDir = classDir.appendingPathComponent("担任", isDirectory: true)
+        let hasTeacher = shots.contains { $0.kind == .teacher && $0.status == .captured }
+        if hasTeacher {
+            try fm.createDirectory(at: teacherDir, withIntermediateDirectories: true)
+        }
+
         // crop_check/
         let cropDir = root.appendingPathComponent("crop_check", isDirectory: true)
         try fm.createDirectory(at: cropDir, withIntermediateDirectories: true)
@@ -42,7 +49,9 @@ enum Exporter {
         for shot in shots where shot.status == .captured {
             guard let img = shot.image else { continue }
             let stem = shot.fileStem(grade: grade, cls: cls)
-            let fileURL = classDir.appendingPathComponent("\(stem).\(format.fileExtension)")
+            // 児童は classDir 直下、担任は 担任/ サブフォルダへ（crop_adjuster の収集対象外）
+            let saveDir = (shot.kind == .teacher) ? teacherDir : classDir
+            let fileURL = saveDir.appendingPathComponent("\(stem).\(format.fileExtension)")
 
             // 画像書き出し（元の全体写真。クロップはしない）
             let data: Data?
@@ -54,8 +63,8 @@ enum Exporter {
             guard let data else { continue }
             try data.write(to: fileURL)
 
-            // crop_overrides 1行
-            if let crop = shot.cropRect {
+            // crop_overrides は児童のみ（crop_adjuster が読むのは児童データのみのため）
+            if shot.kind == .student, let crop = shot.cropRect {
                 let w = Double(img.size.width * img.scale)
                 let h = Double(img.size.height * img.scale)
                 let p = CropMath.params(forNormalizedRect: crop,

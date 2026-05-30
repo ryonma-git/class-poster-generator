@@ -98,10 +98,13 @@ struct ReviewView: View {
             }
             .frame(width: 96, height: 96 / CELL_ASPECT)
             .overlay(alignment: .topLeading) {
-                Text("\(shot.number)")
+                Text(shot.kind == .teacher ? "担\(shot.number)" : "\(shot.number)")
                     .font(.caption2.bold())
                     .padding(3)
-                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                    .background(shot.kind == .teacher
+                                ? Color.indigo.opacity(0.85)
+                                : Color.black.opacity(0.6),
+                                in: RoundedRectangle(cornerRadius: 4))
                     .foregroundStyle(.white)
                     .padding(3)
             }
@@ -154,7 +157,7 @@ struct ShotPreviewSheet: View {
         NavigationStack {
             VStack(spacing: 14) {
                 // 見出し
-                Text("\(state.grade)年 \(state.cls)組  \(shot.number)番")
+                Text(shot.displayLabel(grade: state.grade, cls: state.cls))
                     .font(.title2.bold())
                 Text(statusText)
                     .font(.subheadline)

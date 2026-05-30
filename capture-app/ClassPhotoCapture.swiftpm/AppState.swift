@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
     @Published var grade: Int = 1            // 学年
     @Published var cls: Int = 1              // 組
     @Published var studentCount: Int = 35    // 人数
+    @Published var teacherCount: Int = 1     // 担任の人数（0で担任なし）
     @Published var imageFormat: ImageFormat = .jpeg
 
     // 顔枠の幅（プレビュー幅に対する割合）。小さいほど顔アップ＝高ズーム。
@@ -34,10 +35,17 @@ final class AppState: ObservableObject {
     let gradeRange = 1...6
     let clsRange = 1...12
     let countRange = 1...45
+    let teacherRange = 0...5
 
-    /// 設定をもとに撮影リストを生成して撮影画面へ
+    /// 設定をもとに撮影リストを生成して撮影画面へ。
+    /// 児童（番号順）の後に担任（1〜teacherCount）を続ける。
     func startCapture() {
-        shots = (1...max(1, studentCount)).map { StudentShot(number: $0) }
+        var arr: [StudentShot] = (1...max(1, studentCount))
+            .map { StudentShot(kind: .student, number: $0) }
+        if teacherCount > 0 {
+            arr += (1...teacherCount).map { StudentShot(kind: .teacher, number: $0) }
+        }
+        shots = arr
         currentIndex = 0
         screen = .capture
     }
