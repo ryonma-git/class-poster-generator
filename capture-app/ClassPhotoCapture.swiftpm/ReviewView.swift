@@ -20,6 +20,7 @@ struct ReviewView: View {
     @State private var photoResult: String? = nil
     // 名簿エディタ（Phase 2）
     @State private var showRoster = false
+    @State private var showPoster = false
 
     private let cols = [GridItem(.adaptive(minimum: 96), spacing: 10)]
 
@@ -68,6 +69,9 @@ struct ReviewView: View {
             .sheet(isPresented: $showRoster) {
                 RosterEditorView().environmentObject(state)
             }
+            .sheet(isPresented: $showPoster) {
+                PosterDesignView().environmentObject(state)
+            }
             .alert("書き出しエラー", isPresented: .constant(exportError != nil)) {
                 Button("OK") { exportError = nil }
             } message: {
@@ -80,6 +84,23 @@ struct ReviewView: View {
     private var exportBanner: some View {
         VStack(spacing: 12) {
             Divider().padding(.bottom, 2)
+
+            // iPad 内でポスター PDF を直接生成
+            Button {
+                showPoster = true
+            } label: {
+                HStack {
+                    Image(systemName: "doc.text.image")
+                    Text("ポスターを作成（PDF）")
+                        .fontWeight(.semibold)
+                }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(.indigo)
+            .disabled(state.capturedCount == 0)
 
             // crop_adjuster 用パッケージ書き出し（独自拡張子 .cpcap）
             Button {
@@ -94,7 +115,7 @@ struct ReviewView: View {
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .controlSize(.large)
             .disabled(isExporting || isSavingPhotos || state.capturedCount == 0)
 
