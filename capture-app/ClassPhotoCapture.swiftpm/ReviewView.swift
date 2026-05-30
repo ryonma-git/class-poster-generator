@@ -27,6 +27,7 @@ struct ReviewView: View {
                     }
                 }
                 .padding()
+                exportBanner
             }
             .navigationTitle("確認・書き出し")
             .toolbar {
@@ -63,6 +64,46 @@ struct ReviewView: View {
                 Text(exportError ?? "")
             }
         }
+    }
+
+    /// 画面下部の書き出し案内＋大きいボタン（crop_adjuster との連携を明示）
+    private var exportBanner: some View {
+        VStack(spacing: 10) {
+            Divider().padding(.bottom, 4)
+            Label("撮影が終わったら、ここから書き出します",
+                  systemImage: "square.and.arrow.up.on.square")
+                .font(.headline)
+            Text("ZIPファイルとして AirDrop / Files / Google Drive / メール等に送信できます。\nMac・Windows の crop_adjuster で「📥 撮影データを取り込み」から開くと、写真・クロップ情報・クラス情報がそのまま入ります。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Button {
+                export()
+            } label: {
+                HStack {
+                    if isExporting { ProgressView() }
+                    else { Image(systemName: "shippingbox.and.arrow.backward") }
+                    Text(isExporting ? "書き出し中…" : "crop_adjuster に書き出す（ZIP）")
+                        .fontWeight(.semibold)
+                }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(isExporting || state.capturedCount == 0)
+
+            if state.capturedCount == 0 {
+                Text("※ 撮影済みが1人もありません")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 24)
+        .padding(.top, 10)
     }
 
     private var summary: some View {

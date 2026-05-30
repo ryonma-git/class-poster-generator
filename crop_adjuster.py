@@ -909,7 +909,14 @@ class CropAdjusterApp:
         search_btn = MacButton(topbar_inner, "🔍 名前で検索", self.show_search,
                             bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
                             font=self._font(12, True), padx=16, pady=6)
-        search_btn.pack(side="left", padx=(0,12), pady=15)
+        search_btn.pack(side="left", padx=(0,8), pady=15)
+
+        # 撮影データ取り込みボタン（撮影アプリのZIPを読み込んで写真+overrides+担任を反映）
+        import_btn = MacButton(topbar_inner, "📥 撮影データを取り込み",
+                            self.import_capture_zip,
+                            bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
+                            font=self._font(12, True), padx=16, pady=6)
+        import_btn.pack(side="left", padx=(0,12), pady=15)
 
         # 件数バッジ
         self.saved_var = tk.StringVar(value=f"調整済み {len(self.overrides)}件")
@@ -1768,6 +1775,135 @@ class CropAdjusterApp:
                 "写真フォルダに生徒情報のExcelを置いてください。")
             return
         SearchWindow(self)
+
+    # ── 撮影アプリのZIPを取り込み ──
+    def import_capture_zip(self):
+        """撮影アプリ(ClassPhotoCapture)が書き出した ZIP を取り込む。
+        manifest.json があれば撮影アプリのデータとして扱い、写真フォルダ・
+        crop_overrides.csv に統合する。担任写真は class/担任/ サブフォルダに保存。"""
+        from tkinter import filedialog
+        import zipfile, json, tempfile, shutil
+
+        path = filedialog.askopenfilename(
+            title="撮影アプリのデータ（ZIP）を選択",
+            filetypes=[("撮影データ", "*.zip"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                # 展開
+                with zipfile.ZipFile(path, 'r') as z:
+                    z.extractall(td)
+
+                # manifest.json を探す（直下 or 1階層下）
+                manifest_path = None
+                source_root = td
+                for entry in os.listdir(td):
+                    full = os.path.join(td, entry)
+                    cand = os.path.join(full, 'manifest.json')
+                    if os.path.isdir(full) and os.path.exists(cand):
+                        manifest_path = cand; source_root = full; break
+                if manifest_path is None:
+                    cand = os.path.join(td, 'manifest.json')
+                    if os.path.exists(cand):
+                        manifest_path = cand; source_root = td
+
+                manifest = None
+                if manifest_path:
+                    try:
+                        with open(manifest_path, encoding='utf-8') as f:
+                            manifest = json.load(f)
+                    except Exception:
+                        manifest = None
+
+                if manifest is None:
+                    if not messagebox.askyesno(
+                        "manifest なし",
+                        "撮影アプリの manifest.json が見つかりませんが、\n"
+                        "写真と crop_overrides.csv を取り込みますか？"):
+                        return
+
+                # 取り込み実行
+                student_copied = 0
+                teacher_copied = 0
+                csv_path = None
+                for root, dirs, files in os.walk(source_root):
+                    rel = os.path.relpath(root, source_root)
+                    if rel == '.':
+                        continue
+                    parts = rel.replace('\\', '/').split('/')
+                    # crop_check/ は別途処理
+                    if parts[0] == 'crop_check':
+                        for fn in files:
+                            if fn == 'crop_overrides.csv':
+                                csv_path = os.path.join(root, fn)
+                        continue
+                    # 写真フォルダ・担任フォルダをコピー
+                    target_dir = os.path.join(self.base, rel)
+                    os.makedirs(target_dir, exist_ok=True)
+                    for fn in files:
+                        src = os.path.join(root, fn)
+                        dst = os.path.join(target_dir, fn)
+                        try:
+                            shutil.copy2(src, dst)
+                            if '担任' in parts:
+                                teacher_copied += 1
+                            elif fn.lower().endswith(('.jpg','.jpeg','.png','.heic')):
+                                student_copied += 1
+                        except Exception:
+                            pass
+
+                # crop_overrides.csv をマージ（既存の override に上書き）
+                merged = 0
+                if csv_path and os.path.exists(csv_path):
+                    merged = self._merge_overrides_csv(csv_path)
+
+                # クラス一覧と表示を更新
+                self.classes_list = find_all_classes(self.base)
+                self._refresh_class_list()
+                self.saved_var.set(f"調整済み {len(self.overrides)}件")
+
+                # メタ情報サマリ
+                meta = ""
+                if manifest:
+                    meta = (f"クラス: {manifest.get('grade','?')}年"
+                            f"{manifest.get('cls','?')}組\n"
+                            f"児童: {manifest.get('studentCount','?')}人 "
+                            f"／ 担任: {manifest.get('teacherCount','?')}人\n"
+                            f"画像形式: {manifest.get('imageFormat','?')}\n"
+                            f"書き出し日時: {manifest.get('exportedAt','?')}\n\n")
+                msg = (f"{meta}写真を取り込みました。\n"
+                       f"  児童写真: {student_copied} 枚\n"
+                       f"  担任写真: {teacher_copied} 枚\n"
+                       f"  クロップ情報(overrides): {merged} 件")
+                if teacher_copied:
+                    msg += "\n\n※ 担任写真は『○年○組/担任/』に保存しました。"
+                messagebox.showinfo("取り込み完了", msg)
+        except Exception as e:
+            messagebox.showerror("エラー", f"取り込みに失敗しました:\n{e}")
+
+    def _merge_overrides_csv(self, src_csv_path):
+        """ソースの crop_overrides.csv を既存の overrides にマージし、保存する。"""
+        added = 0
+        try:
+            with open(src_csv_path, encoding='utf-8-sig') as f:
+                for row in csv.DictReader(f):
+                    try:
+                        k = (int(row['grade']), int(row['cls']), int(row['num']))
+                        self.overrides[k] = {
+                            'top_pct': float(row.get('top_pct', 0) or 0),
+                            'left_pct': float(row.get('left_pct', 0) or 0),
+                            'zoom':     float(row.get('zoom', 1) or 1),
+                        }
+                        added += 1
+                    except Exception:
+                        pass
+            save_overrides(self.override_path, self.overrides)
+        except Exception:
+            pass
+        return added
 
     # ── クラス全員を個別PNG出力 ──
     def export_class_all(self):

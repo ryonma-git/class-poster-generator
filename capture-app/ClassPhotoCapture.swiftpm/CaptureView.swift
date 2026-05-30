@@ -108,6 +108,7 @@ struct CaptureView: View {
                 CropEditorView(image: img, crop: $confirmCrop) {
                     editingCrop = false
                 }
+                .interactiveDismissDisabled()   // ドラッグで誤って閉じないように
             }
         }
     }
