@@ -13,6 +13,11 @@ struct CaptureView: View {
     @State private var confirmCrop: CGRect? = nil
     @State private var isCapturing = false
 
+    // 生徒番号が変わった時に大きく表示するスプラッシュ
+    @State private var splashOpacity: Double = 0
+    // ピンチズーム開始時の倍率
+    @State private var pinchStartZoom: CGFloat = 1.0
+
     private let gold = Color(red: 245/255, green: 175/255, blue: 60/255)
 
     var body: some View {
@@ -23,6 +28,7 @@ struct CaptureView: View {
                 if camera.isConfigured {
                     CameraPreview(previewLayer: camera.previewLayer)
                         .ignoresSafeArea()
+                        .gesture(pinchGesture)
                 }
 
                 // 顔枠ガイド
@@ -33,9 +39,19 @@ struct CaptureView: View {
                 VStack {
                     topBar
                     Spacer()
-                    zoomSlider
-                    bottomControls(guide: guide)
+                    sizeSlider
+                    bottomControls(guide: guide, previewSize: geo.size)
                 }
+
+                // 番号変更時の大きいスプラッシュ表示（デフォルト枠のちょっと上）
+                Text("\(state.grade)年\(state.cls)組 \(state.currentShot?.number ?? 0)番 を撮影")
+                    .font(.system(size: 30, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 22).padding(.vertical, 11)
+                    .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
+                    .opacity(splashOpacity)
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.16)
+                    .allowsHitTesting(false)
 
                 // 右上: 顔ガイド ON/OFF トグル
                 VStack {
@@ -77,8 +93,34 @@ struct CaptureView: View {
                 }
             }
         }
-        .onAppear { camera.requestAccess() }
+        .onAppear {
+            camera.requestAccess()
+            showSplash()
+        }
         .onDisappear { camera.stopRunning() }
+        .onChange(of: state.currentIndex) { _ in
+            showSplash()
+        }
+    }
+
+    // ── スプラッシュ表示 ──
+    private func showSplash() {
+        splashOpacity = 1.0
+        withAnimation(.easeOut(duration: 0.35).delay(0.85)) {
+            splashOpacity = 0
+        }
+    }
+
+    // ── ピンチ→カメラズーム ──
+    private var pinchGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                let newZoom = pinchStartZoom * value
+                camera.setZoom(newZoom)
+            }
+            .onEnded { _ in
+                pinchStartZoom = camera.currentZoom
+            }
     }
 
     // ── 顔枠の矩形（プレビュー座標 px）──
@@ -140,27 +182,25 @@ struct CaptureView: View {
         .padding(.top, 12)
     }
 
-    // ── ズーム（クロップ枠の大きさ）スライダー ──
-    // 右へ動かすほど枠が小さく＝顔アップ（高ズーム）。場所が同じなら全員同じ枠で撮れる。
-    private var zoomBinding: Binding<Double> {
+    // ── クロップ枠の大きさスライダー（カメラのズームには無関係）──
+    // 左ほど枠が小さく、右ほど大きい。カメラ自体のズームはピンチで操作。
+    private var sizeBinding: Binding<Double> {
         Binding(
-            get: { Double(0.90 - state.guideWidthFrac) },      // 0(引き)〜0.55(アップ)
-            set: { state.guideWidthFrac = CGFloat(0.90 - $0) }
+            get: { Double(state.guideWidthFrac - 0.35) },     // 0(小)〜0.55(大)
+            set: { state.guideWidthFrac = CGFloat($0 + 0.35) }
         )
     }
 
-    private var zoomSlider: some View {
+    private var sizeSlider: some View {
         VStack(spacing: 3) {
-            Text("クロップ枠のズーム（右ほど顔アップ）")
+            Text("クロップ枠の大きさ（カメラのズームはピンチ操作）")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.85))
             HStack(spacing: 12) {
-                Image(systemName: "minus.magnifyingglass")
-                    .foregroundStyle(.white)
-                Slider(value: zoomBinding, in: 0...0.55)
+                Image(systemName: "minus").foregroundStyle(.white)
+                Slider(value: sizeBinding, in: 0...0.55)
                     .tint(gold)
-                Image(systemName: "plus.magnifyingglass")
-                    .foregroundStyle(.white)
+                Image(systemName: "plus").foregroundStyle(.white)
             }
         }
         .padding(.horizontal, 22)
@@ -172,7 +212,7 @@ struct CaptureView: View {
 
     // ── 下部コントロール ──
     @ViewBuilder
-    private func bottomControls(guide: CGRect) -> some View {
+    private func bottomControls(guide: CGRect, previewSize: CGSize) -> some View {
         HStack(spacing: 28) {
             // 前へ
             Button {
@@ -189,16 +229,16 @@ struct CaptureView: View {
                 controlIcon("person.slash.fill", label: "欠席")
             }
 
-            // シャッター
+            // シャッター（カメラ未準備時はテスト用ダミー画像で撮影扱い）
             Button {
-                doCapture(guide: guide)
+                doCapture(guide: guide, previewSize: previewSize)
             } label: {
                 ZStack {
                     Circle().fill(.white).frame(width: 72, height: 72)
                     Circle().stroke(.white, lineWidth: 4).frame(width: 84, height: 84)
                 }
             }
-            .disabled(!camera.isConfigured || isCapturing)
+            .disabled(isCapturing)
 
             // 次へ
             Button {
@@ -279,14 +319,51 @@ struct CaptureView: View {
     }
 
     // ── アクション ──
-    private func doCapture(guide: CGRect) {
+    private func doCapture(guide: CGRect, previewSize: CGSize) {
         guard !isCapturing else { return }
         isCapturing = true
+
+        // カメラ未準備（シミュレータ等）でもフローを止めないため、
+        // ダミー画像で「撮影したことにする」フォールバックを用意。
+        // 実機(iPad等)ではこのパスは通らない。
+        if !camera.isConfigured {
+            let img = makeTestImage(number: state.currentShot?.number ?? 0)
+            let nx = previewSize.width  > 0 ? guide.minX / previewSize.width  : 0
+            let ny = previewSize.height > 0 ? guide.minY / previewSize.height : 0
+            let nw = previewSize.width  > 0 ? guide.width / previewSize.width  : 1
+            let nh = previewSize.height > 0 ? guide.height / previewSize.height : 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                isCapturing = false
+                confirmImage = img
+                confirmCrop = CGRect(x: nx, y: ny, width: nw, height: nh)
+            }
+            return
+        }
+
         camera.capture(guideRectInLayer: guide, format: state.imageFormat) { img, crop in
             isCapturing = false
             guard let img else { return }
             confirmImage = img
             confirmCrop = crop
+        }
+    }
+
+    /// カメラ無し時のダミー画像（番号入りグレー）。フロー確認用。
+    private func makeTestImage(number: Int) -> UIImage {
+        let size = CGSize(width: 1500, height: 1500 / CELL_ASPECT)  // 横長
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            UIColor(white: 0.55, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            let text = "TEST  #\(number)"
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: size.width * 0.08),
+                .foregroundColor: UIColor.white
+            ]
+            let ns = NSAttributedString(string: text, attributes: attrs)
+            let textSize = ns.size()
+            ns.draw(at: CGPoint(x: (size.width - textSize.width) / 2,
+                                y: (size.height - textSize.height) / 2))
         }
     }
 

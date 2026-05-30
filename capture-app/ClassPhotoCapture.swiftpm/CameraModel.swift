@@ -20,6 +20,11 @@ final class CameraModel: NSObject, ObservableObject {
     @Published var isConfigured = false
     @Published var errorMessage: String? = nil
 
+    // ── ズーム（ピンチで操作）──
+    @Published var currentZoom: CGFloat = 1.0
+    @Published var maxZoom: CGFloat = 5.0
+    private var currentDevice: AVCaptureDevice?
+
     // 撮影完了コールバック保持用
     private var captureCompletion: ((UIImage?, CGRect?) -> Void)?
     // 撮影リクエスト時の枠情報（プレビュー座標→画像座標変換に使う）
@@ -63,18 +68,35 @@ final class CameraModel: NSObject, ObservableObject {
                 return
             }
             self.session.addInput(input)
+            self.currentDevice = device
 
             if self.session.canAddOutput(self.photoOutput) {
                 self.session.addOutput(self.photoOutput)
             }
             self.session.commitConfiguration()
 
+            let mx = min(5.0, device.activeFormat.videoMaxZoomFactor)
             DispatchQueue.main.async {
                 self.previewLayer.session = self.session
                 self.previewLayer.videoGravity = .resizeAspectFill
+                self.maxZoom = mx
                 self.isConfigured = true
             }
             self.startRunning()
+        }
+    }
+
+    /// ピンチからのズーム要求。1.0〜maxZoom にクランプして適用。
+    func setZoom(_ z: CGFloat) {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.currentDevice else { return }
+            do {
+                try device.lockForConfiguration()
+                let clamped = min(self.maxZoom, max(1.0, z))
+                device.videoZoomFactor = clamped
+                device.unlockForConfiguration()
+                DispatchQueue.main.async { self.currentZoom = clamped }
+            } catch {}
         }
     }
 
