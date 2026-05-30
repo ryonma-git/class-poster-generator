@@ -43,7 +43,19 @@ enum CSVImportError: Error, LocalizedError {
 
 enum CSVImporter {
 
-    /// ファイルを読み込んで構造化済みデータを返す。
+    /// 拡張子に応じて Excel(.xlsx) / CSV / TSV を読み分けて取り込む。
+    static func loadAny(from url: URL) throws -> ImportedRoster {
+        let ext = url.pathExtension.lowercased()
+        if ext == "xlsx" {
+            let rawRows = try XLSXImporter.loadRows(from: url)
+            return makeImported(rawRows: rawRows,
+                                delimiter: ",",
+                                encoding: "Excel (.xlsx)")
+        }
+        return try load(from: url)
+    }
+
+    /// CSV/TSV ファイルを読み込んで構造化済みデータを返す。
     static func load(from url: URL) throws -> ImportedRoster {
         let didStart = url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
@@ -54,19 +66,29 @@ enum CSVImporter {
         let rawRows = parse(text, delimiter: delim)
 
         guard !rawRows.isEmpty else { throw CSVImportError.emptyFile }
+        return makeImported(rawRows: rawRows, delimiter: delim, encoding: encoding)
+    }
+
+    /// 生の行配列から ImportedRoster（ヘッダー判定＋列推定）を組み立てる。
+    /// CSV / TSV / XLSX 共通の後段処理。
+    static func makeImported(rawRows: [[String]],
+                             delimiter: Character,
+                             encoding: String) -> ImportedRoster {
+        let nonEmpty = rawRows.filter { !$0.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } }
+        let source = nonEmpty.isEmpty ? rawRows : nonEmpty
 
         // ヘッダー判定（最初の行に数字以外が多ければヘッダーとみなす）
-        let isHeader = looksLikeHeader(rawRows[0])
+        let isHeader = source.isEmpty ? false : looksLikeHeader(source[0])
         let headers: [String]
         let dataRows: [[String]]
         if isHeader {
-            headers = rawRows[0]
-            dataRows = Array(rawRows.dropFirst())
+            headers = source[0]
+            dataRows = Array(source.dropFirst())
         } else {
             // 列番号でヘッダーを仮置き（"C","D","E"…のExcel列風）
-            let n = rawRows[0].count
+            let n = source.first?.count ?? 0
             headers = (0..<n).map { excelColumnName($0) }
-            dataRows = rawRows
+            dataRows = source
         }
 
         let mapping = guessMapping(headers: headers,
@@ -77,7 +99,7 @@ enum CSVImporter {
             headers: headers,
             rows: dataRows,
             mapping: mapping,
-            detectedDelimiter: delim,
+            detectedDelimiter: delimiter,
             detectedEncoding: encoding,
             hasHeader: isHeader
         )

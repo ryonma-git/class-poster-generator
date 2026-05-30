@@ -55,6 +55,39 @@ enum CropMath {
         return CropParams(topPct: topPct, leftPct: leftPct, zoom: zoom)
     }
 
+    /// (top_pct, left_pct, zoom) から実際のクロップ元矩形（画像ピクセル座標）を求める。
+    /// make_poster.py の smart_crop と完全に同じ式。これにより iOS ポスターの
+    /// 写真フレーミングが本体生成のポスターと一致する（歪みも出ない）。
+    /// - aspect: そのセルの実アスペクト（cw / photoH）
+    static func sourceCropRect(imageW: Double, imageH: Double,
+                               params: CropParams, aspect: Double) -> CGRect {
+        let w = max(1.0, imageW)
+        let h = max(1.0, imageH)
+
+        // ベースサイズ（zoom=1.0 時の最大枠）
+        let baseW: Double, baseH: Double
+        if w / h < aspect {
+            baseW = w
+            baseH = baseW / aspect
+        } else {
+            baseH = h
+            baseW = baseH * aspect
+        }
+
+        let zoom = min(5.0, max(1.0, params.zoom))
+        let cropW = baseW / zoom
+        let cropH = baseH / zoom
+
+        let cx = w / 2.0 + w * params.leftPct / 100.0
+        let cy = h * params.topPct / 100.0 + cropH / 2.0
+        var x1 = cx - cropW / 2.0
+        var y1 = cy - cropH / 2.0
+        x1 = max(0.0, min(x1, w - cropW))
+        y1 = max(0.0, min(y1, h - cropH))
+
+        return CGRect(x: x1, y: y1, width: cropW, height: cropH)
+    }
+
     /// 顔枠（プレビュー上の正規化矩形）。横中心・やや上寄り。
     /// 見た目の縦横比は常に aspect を保つ（はみ出す場合は幅を縮めて維持）。
     /// - previewAspect: プレビュー領域の縦横比 (w/h)

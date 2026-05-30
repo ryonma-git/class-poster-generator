@@ -3,23 +3,23 @@ import SwiftUI
 // ════════════════════════════════════════════════════════════════
 //  RosterEditorView — 名簿手入力
 //
-//  ReviewView から「名簿を編集」で起動。出席番号順に
-//  ふりがな（ポスター掲載用）／漢字／担任名 を入力。
+//  担任 → 児童 の順に、漢字／ふりがなを入力。
+//  キーボード操作は Excel ライク:
+//    - Return（次へ）: 次の人の漢字欄へ
+//    - Tab（外付けキーボード）: 同じ人の 漢字 → ふりがな → 次の人 と移動
+//    - キーボード上の ▲▼ でも前後の欄に移動可能
 //
 //  AppState.roster を直接編集するので、戻った瞬間に反映される。
-//  追加機能（CSV取り込み・OCR）は別シートとして上部に並べる予定。
 // ════════════════════════════════════════════════════════════════
 
 struct RosterEditorView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    /// 入力フォーカスを enum で一元管理（タップで該当フィールドへフォーカスを送れる）
+    /// 入力フォーカス。role と番号で一意。漢字/ふりがなの2種。
     enum Field: Hashable {
-        case studentFurigana(Int)   // 出席番号
-        case studentKanji(Int)
-        case teacherFurigana(Int)
-        case teacherKanji(Int)
+        case kanji(MemberRole, Int)
+        case furigana(MemberRole, Int)
     }
     @FocusState private var focused: Field?
     @State private var showImporter = false
@@ -29,10 +29,11 @@ struct RosterEditorView: View {
         NavigationStack {
             Form {
                 styleSection
-                studentSection
+                // 担任を先頭に（撮影は最後だが、名簿は担任から）
                 if !state.roster.teachers.isEmpty {
                     teacherSection
                 }
+                studentSection
                 hintSection
             }
             .navigationTitle("名簿")
@@ -47,7 +48,7 @@ struct RosterEditorView: View {
                         Button {
                             showImporter = true
                         } label: {
-                            Label("CSV / TSV から取り込み", systemImage: "tablecells.badge.ellipsis")
+                            Label("Excel・CSV から取り込み", systemImage: "tablecells.badge.ellipsis")
                         }
                         Button {
                             showOCR = true
@@ -70,20 +71,15 @@ struct RosterEditorView: View {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
-                // キーボード上の「次へ」ボタン
+                // キーボード上の前後移動
                 ToolbarItemGroup(placement: .keyboard) {
-                    Button {
-                        focusPrevious()
-                    } label: { Image(systemName: "chevron.up") }
-                    Button {
-                        focusNext()
-                    } label: { Image(systemName: "chevron.down") }
+                    Button { focusPrevious() } label: { Image(systemName: "chevron.up") }
+                    Button { focusNext() } label: { Image(systemName: "chevron.down") }
                     Spacer()
                     Button("閉じる") { focused = nil }
                 }
             }
             .onAppear {
-                // 撮影リストと名簿の人数を必ず揃える（後から人数変更しても破綻しないよう）
                 state.roster.ensureStudentCount(state.studentCount)
                 state.roster.ensureTeacherCount(state.teacherCount)
             }
@@ -116,40 +112,36 @@ struct RosterEditorView: View {
         }
     }
 
-    private var studentSection: some View {
-        Section {
-            ForEach(state.roster.students) { member in
-                MemberRow(member: member,
-                          numberLabel: "\(member.number)番",
-                          focusedFurigana: $focused,
-                          furiganaField: .studentFurigana(member.number),
-                          kanjiField: .studentKanji(member.number))
-            }
-        } header: {
-            Text("児童・生徒  \(state.roster.students.count)名")
-        }
-    }
-
     private var teacherSection: some View {
         Section {
             ForEach(state.roster.teachers) { member in
-                MemberRow(member: member,
+                memberRow(member: member, role: .teacher,
                           numberLabel: state.roster.teachers.count > 1
-                            ? "担任\(member.number)"
-                            : "担任",
-                          focusedFurigana: $focused,
-                          furiganaField: .teacherFurigana(member.number),
-                          kanjiField: .teacherKanji(member.number))
+                            ? "担任\(member.number)" : "担任")
             }
         } header: {
             Text("担任  \(state.roster.teachers.count)名")
         }
     }
 
+    private var studentSection: some View {
+        Section {
+            ForEach(state.roster.students) { member in
+                memberRow(member: member, role: .student,
+                          numberLabel: "\(member.number)番")
+            }
+        } header: {
+            Text("児童・生徒  \(state.roster.students.count)名")
+        } footer: {
+            Text("Return で次の人へ、外付けキーボードの Tab で漢字↔ふりがなを移動できます。")
+                .font(.caption)
+        }
+    }
+
     private var hintSection: some View {
         Section {
             Label {
-                Text("ふりがなは将来 CSV / Excel 取り込みや、漢字からの自動生成にも対応する予定です。")
+                Text("漢字を入れて「✨」を押すとふりがなを自動生成します（要確認）。Excel・CSV・写真からの一括取り込みは左上メニューから。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } icon: {
@@ -159,21 +151,95 @@ struct RosterEditorView: View {
         }
     }
 
+    // MARK: - 1人分の行（@FocusState を親で管理するためメソッドで構築）
+
+    @ViewBuilder
+    private func memberRow(member: Member, role: MemberRole, numberLabel: String) -> some View {
+        let kanjiField = Field.kanji(role, member.number)
+        let furiField = Field.furigana(role, member.number)
+        HStack(alignment: .top) {
+            Text(numberLabel)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 56, alignment: .leading)
+                .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 6) {
+                // 漢字（上）
+                TextField("漢字（例: 田中 太郎）", text: bind(member, \.name))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($focused, equals: kanjiField)
+                    .submitLabel(.next)
+                    .onSubmit { advanceToNextPerson(after: member.number, role: role) }
+                Divider()
+                // ふりがな（下）＋ 自動生成
+                HStack(spacing: 6) {
+                    TextField("ふりがな（例: たなか たろう）", text: bind(member, \.furigana))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($focused, equals: furiField)
+                        .submitLabel(.next)
+                        .onSubmit { advanceToNextPerson(after: member.number, role: role) }
+                    if !member.name.isEmpty {
+                        Button {
+                            let g = FuriganaGenerator.generate(member.name)
+                            if !g.isEmpty { member.furigana = g }
+                        } label: {
+                            Image(systemName: "wand.and.stars")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.purple)
+                        .accessibilityLabel("漢字からふりがなを自動生成")
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// Member の String プロパティへの Binding（@Published を直接束縛）
+    private func bind(_ member: Member, _ keyPath: ReferenceWritableKeyPath<Member, String>) -> Binding<String> {
+        Binding(
+            get: { member[keyPath: keyPath] },
+            set: { member[keyPath: keyPath] = $0 }
+        )
+    }
+
     // MARK: - フォーカス移動
 
-    /// 入力欄を順に並べた一覧（移動順を決める）
+    /// 担任 → 児童 の順で、各人 [漢字, ふりがな] と並べた全フィールド順
     private var fieldOrder: [Field] {
         var arr: [Field] = []
-        for m in state.roster.students {
-            arr.append(.studentFurigana(m.number))
-            arr.append(.studentKanji(m.number))
-        }
         for m in state.roster.teachers {
-            arr.append(.teacherFurigana(m.number))
-            arr.append(.teacherKanji(m.number))
+            arr.append(.kanji(.teacher, m.number))
+            arr.append(.furigana(.teacher, m.number))
+        }
+        for m in state.roster.students {
+            arr.append(.kanji(.student, m.number))
+            arr.append(.furigana(.student, m.number))
         }
         return arr
     }
+
+    /// Return（次へ）: 次の人の漢字欄へ。末尾ならキーボードを閉じる。
+    private func advanceToNextPerson(after number: Int, role: MemberRole) {
+        let order = fieldOrder
+        // 現在の人の次の人の .kanji を探す
+        guard let curIdx = order.firstIndex(where: {
+            if case .kanji(let r, let n) = $0 { return r == role && n == number }
+            if case .furigana(let r, let n) = $0 { return r == role && n == number }
+            return false
+        }) else { focused = nil; return }
+        // curIdx 以降で、現在の人と違う最初の .kanji を探す
+        for i in (curIdx + 1)..<order.count {
+            if case .kanji(let r, let n) = order[i], !(r == role && n == number) {
+                focused = order[i]
+                return
+            }
+        }
+        focused = nil   // 最後の人なら閉じる
+    }
+
     private func focusNext() {
         let order = fieldOrder
         guard let cur = focused, let i = order.firstIndex(of: cur) else {
@@ -189,9 +255,10 @@ struct RosterEditorView: View {
         focused = order[safe: i - 1] ?? order.last
     }
 
-    /// 漢字が入っていてふりがなが空欄の Member すべてに対して自動生成
+    // MARK: - 一括操作
+
     private func generateAllFurigana() {
-        for m in state.roster.students + state.roster.teachers {
+        for m in state.roster.teachers + state.roster.students {
             guard !m.name.isEmpty, m.furigana.isEmpty else { continue }
             let g = FuriganaGenerator.generate(m.name)
             if !g.isEmpty { m.furigana = g }
@@ -199,60 +266,9 @@ struct RosterEditorView: View {
     }
 
     private func clearAllNames() {
-        for m in state.roster.students {
+        for m in state.roster.students + state.roster.teachers {
             m.name = ""; m.furigana = ""
         }
-        for m in state.roster.teachers {
-            m.name = ""; m.furigana = ""
-        }
-    }
-}
-
-// MARK: - 1人分の行
-
-private struct MemberRow: View {
-    @ObservedObject var member: Member
-    let numberLabel: String
-    @FocusState.Binding var focusedFurigana: RosterEditorView.Field?
-    let furiganaField: RosterEditorView.Field
-    let kanjiField: RosterEditorView.Field
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(numberLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 56, alignment: .leading)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        TextField("ふりがな（例: たなか たろう）",
-                                  text: $member.furigana)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .focused($focusedFurigana, equals: furiganaField)
-                        if !member.name.isEmpty {
-                            Button {
-                                let generated = FuriganaGenerator.generate(member.name)
-                                if !generated.isEmpty { member.furigana = generated }
-                            } label: {
-                                Image(systemName: "wand.and.stars")
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.purple)
-                            .accessibilityLabel("漢字からふりがなを自動生成")
-                        }
-                    }
-                    Divider()
-                    TextField("漢字（例: 田中 太郎）",
-                              text: $member.name)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focusedFurigana, equals: kanjiField)
-                }
-            }
-        }
-        .padding(.vertical, 2)
     }
 }
 

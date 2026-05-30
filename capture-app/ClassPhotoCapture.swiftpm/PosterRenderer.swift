@@ -49,11 +49,9 @@ enum PosterRenderer {
             ctx.beginPage()
             let cg = ctx.cgContext
 
-            // 原点を左上に移動して y を反転（mm 座標で考えやすくする）
-            cg.saveGState()
-            cg.translateBy(x: 0, y: pageRect.height)
-            cg.scaleBy(x: 1, y: -1)
-
+            // UIGraphicsPDFRenderer のコンテキストは UIKit ネイティブ（左上原点・y下向き）。
+            // 余計な反転はかけず、そのまま左上原点の座標で描く。
+            // テキストは UIKit の draw(in:) で正立、画像のみ CGImage 描画時に局所反転する。
             drawPage(
                 cg: cg,
                 pageSize: pageRect.size,
@@ -63,8 +61,6 @@ enum PosterRenderer {
                 teachers: teachers,
                 config: config
             )
-
-            cg.restoreGState()
         }
         try data.write(to: url)
         return url
@@ -227,7 +223,7 @@ enum PosterRenderer {
                                         member: Member?,
                                         roster: Roster,
                                         design: PosterDesign) {
-        let r: CGFloat = PosterLayout.mm(2.5)  // 角丸
+        let r: CGFloat = PosterLayout.mm(3.0)  // 角丸（本体18px@150dpi相当）
         let photoH = rect.height - labelH
         let photoRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: photoH)
         let labelRect = CGRect(x: rect.minX, y: rect.minY + photoH, width: rect.width, height: labelH)
@@ -331,7 +327,7 @@ enum PosterRenderer {
                                                 member: Member?,
                                                 roster: Roster,
                                                 design: PosterDesign) {
-        let r: CGFloat = PosterLayout.mm(2.5)
+        let r: CGFloat = PosterLayout.mm(3.0)
         let bgPath = UIBezierPath(roundedRect: rect, cornerRadius: r)
         cg.saveGState()
         cg.setFillColor(design.teacherBgUI.cgColor)
@@ -378,7 +374,7 @@ enum PosterRenderer {
                                                  member: Member?,
                                                  roster: Roster,
                                                  design: PosterDesign) {
-        let r: CGFloat = PosterLayout.mm(2.5)
+        let r: CGFloat = PosterLayout.mm(3.0)
         let photoH = rect.height - labelH
         let photoRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: photoH)
         let labelRect = CGRect(x: rect.minX, y: rect.minY + photoH,
@@ -465,32 +461,33 @@ enum PosterRenderer {
         guard let cgImage = image.cgImage else { return }
         let iw = CGFloat(cgImage.width)
         let ih = CGFloat(cgImage.height)
+        let cellAspect = Double(dst.width / dst.height)
 
-        // 切り抜き矩形（画像ピクセル座標）
+        // 切り抜き矩形（画像ピクセル座標）。
+        // 本体 make_poster.py と同じ経路: 枠 → (top_pct,left_pct,zoom) → smart_crop。
+        // これでセル比率に厳密一致し、歪みも本体との差異も出ない。
         let srcRect: CGRect
         if let n = cropRect, n.width > 0, n.height > 0 {
-            srcRect = CGRect(
-                x: max(0, n.minX) * iw,
-                y: max(0, n.minY) * ih,
-                width: min(1, n.width) * iw,
-                height: min(1, n.height) * ih
-            ).integral
+            let params = CropMath.params(forNormalizedRect: n,
+                                         imageW: Double(iw), imageH: Double(ih),
+                                         aspect: cellAspect)
+            srcRect = CropMath.sourceCropRect(imageW: Double(iw), imageH: Double(ih),
+                                              params: params, aspect: cellAspect).integral
         } else {
             // クロップ未設定: セル比率でセンタークロップ
-            let aspect = dst.width / dst.height
-            if iw / ih > aspect {
-                let w = ih * aspect
+            if iw / ih > CGFloat(cellAspect) {
+                let w = ih * CGFloat(cellAspect)
                 srcRect = CGRect(x: (iw - w) / 2, y: 0, width: w, height: ih)
             } else {
-                let h = iw / aspect
+                let h = iw / CGFloat(cellAspect)
                 srcRect = CGRect(x: 0, y: (ih - h) / 2, width: iw, height: h)
             }
         }
 
         guard let cropped = cgImage.cropping(to: srcRect) else { return }
 
-        // CoreGraphics の画像描画は y反転して描く必要がある（今コンテキストはY反転中なので、
-        // 画像描画時は一時的に元のY軸方向に戻す）
+        // UIKit ネイティブのコンテキストでは CGContext.draw(image:) は上下逆に描かれるため、
+        // dst の範囲内で局所的に y 反転してから描く。
         cg.saveGState()
         cg.translateBy(x: dst.minX, y: dst.minY + dst.height)
         cg.scaleBy(x: 1, y: -1)
@@ -566,7 +563,7 @@ enum PosterRenderer {
         (s as NSString).size(withAttributes: [.font: font]).width
     }
 
-    /// Y反転コンテキスト上でも普通に読める向きで文字を描く
+    /// UIKit ネイティブ座標（左上原点）で文字を描く
     private static func drawText(cg: CGContext,
                                  text: String,
                                  rect: CGRect,
@@ -597,11 +594,6 @@ enum PosterRenderer {
         case .bottom: y = rect.maxY - textSize.height
         }
 
-        // Y反転中のコンテキストでテキストを正しい向きに描く
-        cg.saveGState()
-        cg.translateBy(x: x, y: y + textSize.height)
-        cg.scaleBy(x: 1, y: -1)
-        str.draw(at: .zero)
-        cg.restoreGState()
+        str.draw(at: CGPoint(x: x, y: y))
     }
 }

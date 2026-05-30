@@ -85,24 +85,7 @@ struct ReviewView: View {
         VStack(spacing: 12) {
             Divider().padding(.bottom, 2)
 
-            // iPad 内でポスター PDF を直接生成
-            Button {
-                showPoster = true
-            } label: {
-                HStack {
-                    Image(systemName: "doc.text.image")
-                    Text("ポスターを作成（PDF）")
-                        .fontWeight(.semibold)
-                }
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(.indigo)
-            .disabled(state.capturedCount == 0)
-
-            // crop_adjuster 用パッケージ書き出し（独自拡張子 .cpcap）
+            // ① メイン: crop_adjuster 用パッケージ書き出し（紫 prominent）
             Button {
                 export()
             } label: {
@@ -115,11 +98,12 @@ struct ReviewView: View {
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .tint(.purple)
             .disabled(isExporting || isSavingPhotos || state.capturedCount == 0)
 
-            // 写真ライブラリへの書き出し
+            // ② 写真ライブラリへの書き出し
             Button {
                 showPhotoModeDialog = true
             } label: {
@@ -140,6 +124,22 @@ struct ReviewView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .disabled(isExporting || isSavingPhotos || state.capturedCount == 0)
+
+            // ③ iPad 内でポスター PDF を直接生成
+            Button {
+                showPoster = true
+            } label: {
+                HStack {
+                    Image(systemName: "doc.text.image")
+                    Text("ポスターを作成（PDF）")
+                        .fontWeight(.semibold)
+                }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(state.capturedCount == 0)
 
             if state.capturedCount == 0 {
                 Text("※ 撮影済みが1人もありません")

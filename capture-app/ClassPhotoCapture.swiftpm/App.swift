@@ -1,8 +1,10 @@
 import SwiftUI
 
 // ポスターの写真エリア比率（cw/ph）。crop_adjuster.py の CELL_ASPECT と一致させること。
-// A2 6×7 レイアウトでの実測値 ≒ 1.1289。
-let CELL_ASPECT: CGFloat = 1.1289
+// 2026年度よりデフォルト用紙が A1 になったため A1 6×7 基準 ≒ 1.0076。
+// （用紙が変わると実セル比は変わるが、PosterRenderer は実セル比で smart_crop
+//  し直すので歪みは出ない。本値は撮影ガイドと crop_adjuster プレビュー用の代表値。）
+let CELL_ASPECT: CGFloat = 1.0076
 
 @main
 struct ClassPhotoCaptureApp: App {

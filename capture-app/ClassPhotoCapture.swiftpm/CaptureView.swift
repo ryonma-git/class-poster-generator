@@ -19,6 +19,8 @@ struct CaptureView: View {
     @State private var pinchStartZoom: CGFloat = 1.0
     // クロップ調整ビュー表示フラグ
     @State private var editingCrop = false
+    // 「最初からやり直す」確認ダイアログ
+    @State private var showResetConfirm = false
 
     private let gold = Color(red: 245/255, green: 175/255, blue: 60/255)
 
@@ -54,6 +56,36 @@ struct CaptureView: View {
                     .opacity(splashOpacity)
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.16)
                     .allowsHitTesting(false)
+
+                // 左上: 設定へ戻る / 最初からやり直す
+                VStack {
+                    HStack(spacing: 8) {
+                        Button {
+                            state.backToSetup()
+                        } label: {
+                            Label("設定", systemImage: "chevron.left")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(.black.opacity(0.4), in: Capsule())
+                        }
+                        Button(role: .destructive) {
+                            showResetConfirm = true
+                        } label: {
+                            Label("やり直す", systemImage: "arrow.counterclockwise")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(.black.opacity(0.4), in: Capsule())
+                        }
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(.top, 14)
+                .padding(.leading, 16)
 
                 // 右上: 顔ガイド ON/OFF トグル
                 VStack {
@@ -100,6 +132,19 @@ struct CaptureView: View {
             showSplash()
         }
         .onDisappear { camera.stopRunning() }
+        .confirmationDialog("最初からやり直しますか？",
+                            isPresented: $showResetConfirm,
+                            titleVisibility: .visible) {
+            Button("撮影をすべて消去（名簿は残す）", role: .destructive) {
+                state.resetCapture(keepRoster: true)
+            }
+            Button("すべて消去（名簿も消す）", role: .destructive) {
+                state.resetCapture(keepRoster: false)
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("撮影した写真がすべて削除されます。この操作は取り消せません。")
+        }
         .onChange(of: state.currentIndex) { _ in
             showSplash()
         }
@@ -173,12 +218,29 @@ struct CaptureView: View {
          CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY)]
     }
 
+    /// 現在の撮影対象に対応する名簿の名前（あれば）。撮影中の確認に使う。
+    private var currentRosterName: String? {
+        guard let shot = state.currentShot else { return nil }
+        let member = shot.kind == .student
+            ? state.roster.studentByNumber(shot.number)
+            : state.roster.teacherByNumber(shot.number)
+        guard let m = member else { return nil }
+        let name = m.name.isEmpty ? m.furigana : m.name
+        return name.isEmpty ? nil : name
+    }
+
     // ── 上部バー ──
     private var topBar: some View {
         VStack(spacing: 4) {
             Text("\(state.currentShot?.displayLabel(group: state.group) ?? "") を撮影")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
+            // 名簿に名前があれば大きめに表示（誰を撮るか一目で分かる）
+            if let name = currentRosterName {
+                Text(name)
+                    .font(.headline)
+                    .foregroundStyle(gold)
+            }
             Text("済 \(state.capturedCount) / 欠席 \(state.absentCount) / 全 \(state.shots.count)")
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.85))

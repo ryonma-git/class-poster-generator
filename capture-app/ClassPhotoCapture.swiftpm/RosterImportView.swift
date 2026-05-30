@@ -49,12 +49,7 @@ struct RosterImportView: View {
             }
             .fileImporter(
                 isPresented: $showFilePicker,
-                allowedContentTypes: [
-                    UTType.commaSeparatedText,
-                    UTType.tabSeparatedText,
-                    UTType.text,
-                    UTType.plainText
-                ],
+                allowedContentTypes: allowedTypes,
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
@@ -78,34 +73,41 @@ struct RosterImportView: View {
     private var introScreen: some View {
         Form {
             Section {
-                Label("CSV / TSV ファイルから一括入力", systemImage: "tablecells")
+                Label("Excel・CSV から名簿を一括入力", systemImage: "tablecells")
                     .font(.headline)
-                Text("名簿を CSV / TSV で書き出して取り込みます。番号・氏名・ふりがな（あれば学年・組）を自動でマップします。")
+                Text("Excel（.xlsx）はそのまま選べます。番号・氏名・ふりがな（あれば学年・組）を自動でマップします。")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Section("対応フォーマット") {
-                Label("CSV（カンマ区切り）", systemImage: "doc.text")
-                Label("TSV（タブ区切り）", systemImage: "doc.text")
-                Label("文字コード: UTF-8 / Shift-JIS 自動判定", systemImage: "character")
-            }
-            Section("Excel(.xlsx)の場合") {
-                Text("Excel から「ファイル → 名前を付けて保存 → CSV UTF-8」で書き出してから選んでください。")
-                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Section {
                 Button {
                     showFilePicker = true
                 } label: {
-                    Label("ファイルを選択", systemImage: "folder")
+                    Label("ファイルを選択（Excel / CSV）", systemImage: "folder")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             }
-            Section("本体（PC）の名簿フォーマット") {
-                Text("PC 版（make_poster.py）が使う Excel 名簿（C=学年 D=組 E=番号 R=ふりがな の慣習列）も、ヘッダー無しの CSV にして保存すれば自動でマップされます。")
+            Section("対応フォーマット") {
+                Label("Excel（.xlsx）— そのまま読み込み", systemImage: "tablecells.fill")
+                Label("CSV（カンマ区切り）", systemImage: "doc.text")
+                Label("TSV（タブ区切り）", systemImage: "doc.text")
+                Label("文字コード: UTF-8 / Shift-JIS 自動判定", systemImage: "character")
+            }
+            Section("うまく読めないときは（Excel → CSV）") {
+                Text("""
+                古い Excel や複雑なブックは、CSV にすると確実です。
+                1. Excel で名簿ブックを開く
+                2.「ファイル」→「名前を付けて保存」
+                3. 形式で「CSV UTF-8（コンマ区切り）」を選ぶ
+                4. 保存した .csv をこの画面で選択
+                """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("どんな列でも大丈夫です") {
+                Text("1行目が見出し（「番号」「氏名」「ふりがな」など）なら自動認識します。見出しが無くても、次の画面で各列の役割を選べます。最低限「番号」さえあれば取り込めます。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -218,9 +220,24 @@ struct RosterImportView: View {
 
     // MARK: - 操作
 
+    /// 受け付けるファイル種別（Excel .xlsx ＋ CSV/TSV/テキスト）
+    private var allowedTypes: [UTType] {
+        var types: [UTType] = [
+            .commaSeparatedText,
+            .tabSeparatedText,
+            .text,
+            .plainText
+        ]
+        if let xlsx = UTType(filenameExtension: "xlsx") { types.insert(xlsx, at: 0) }
+        if let spreadsheet = UTType("org.openxmlformats.spreadsheetml.sheet") {
+            types.insert(spreadsheet, at: 0)
+        }
+        return types
+    }
+
     private func loadFile(_ url: URL) {
         do {
-            imported = try CSVImporter.load(from: url)
+            imported = try CSVImporter.loadAny(from: url)
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         }

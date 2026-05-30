@@ -65,19 +65,39 @@ final class AppState: ObservableObject {
     }
 
     /// 設定をもとに撮影リスト＋名簿の枠を生成して撮影画面へ。
+    /// 既に撮影済みのデータがあれば kind+number で引き継ぐ（設定画面に戻って
+    /// 戻ってきても写真が消えないように）。
     func startCapture() {
-        // 撮影リスト
+        // 既存ショットを (kind, number) で引けるよう退避
+        var existing: [String: StudentShot] = [:]
+        for s in shots { existing["\(s.kind)-\(s.number)"] = s }
+
+        func makeOrReuse(kind: ShotKind, number: Int) -> StudentShot {
+            if let prev = existing["\(kind)-\(number)"] { return prev }
+            return StudentShot(kind: kind, number: number)
+        }
+
         var arr: [StudentShot] = (1...max(1, studentCount))
-            .map { StudentShot(kind: .student, number: $0) }
+            .map { makeOrReuse(kind: .student, number: $0) }
         if teacherCount > 0 {
-            arr += (1...teacherCount).map { StudentShot(kind: .teacher, number: $0) }
+            arr += (1...teacherCount).map { makeOrReuse(kind: .teacher, number: $0) }
         }
         shots = arr
-        currentIndex = 0
+        // 最初の未撮影へ。全部撮影済みなら先頭。
+        currentIndex = shots.firstIndex(where: { $0.status == .pending }) ?? 0
         // 名簿の枠も人数に合わせて伸縮（既存入力は保持）
         roster.ensureStudentCount(studentCount)
         roster.ensureTeacherCount(teacherCount)
         screen = .capture
+    }
+
+    /// 撮影画面へ戻る（リストは作り直さず、撮影済みデータを維持）。
+    func resumeCapture() {
+        if shots.isEmpty {
+            startCapture()
+        } else {
+            screen = .capture
+        }
     }
 
     var currentShot: StudentShot? {
@@ -105,5 +125,27 @@ final class AppState: ObservableObject {
     }
     func goNext() {
         if currentIndex < shots.count - 1 { currentIndex += 1 }
+    }
+
+    /// 設定画面へ戻る（撮影データは保持）。撮影途中に設定を見直したいとき用。
+    func backToSetup() {
+        screen = .setup
+    }
+
+    /// 撮影データを全消去して最初からやり直す（名簿は保持するか選べる）。
+    /// - keepRoster: true なら名簿（名前・ふりがな）は残す。
+    func resetCapture(keepRoster: Bool) {
+        for shot in shots {
+            shot.image = nil
+            shot.cropRect = nil
+            shot.status = .pending
+        }
+        // 撮影リスト自体も作り直す（人数変更にも追従）
+        shots = []
+        currentIndex = 0
+        if !keepRoster {
+            roster = Roster()
+        }
+        screen = .setup
     }
 }

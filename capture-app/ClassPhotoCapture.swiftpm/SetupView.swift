@@ -14,6 +14,8 @@ struct SetupView: View {
 
     /// 学校モードでの「組」表記スタイル（UI制御用）
     @State private var classKind: ClassKind = .number
+    /// 名簿エディタの表示
+    @State private var showRoster = false
 
     enum ClassKind: String, CaseIterable, Identifiable {
         case number = "数字"
@@ -32,6 +34,7 @@ struct SetupView: View {
                 }
                 countSection
                 teacherSection
+                rosterSection
                 formatSection
                 tipsSection
                 startSection
@@ -42,7 +45,55 @@ struct SetupView: View {
                 if case .letter = state.group.classLabel { classKind = .letter }
                 else { classKind = .number }
             }
+            .sheet(isPresented: $showRoster) {
+                RosterEditorView().environmentObject(state)
+            }
         }
+    }
+
+    // MARK: - 名簿（撮影前に作っておける）
+
+    private var rosterSection: some View {
+        Section {
+            Button {
+                // 名簿の枠を現在の人数に合わせてから開く
+                state.roster.ensureStudentCount(state.studentCount)
+                state.roster.ensureTeacherCount(state.teacherCount)
+                showRoster = true
+            } label: {
+                HStack {
+                    Image(systemName: "person.text.rectangle")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(rosterEntered > 0 ? "名簿を編集" : "名簿を入力（任意）")
+                            .fontWeight(.semibold)
+                        Text(rosterStatusText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                }
+            }
+            .tint(.primary)
+        } header: {
+            Text("名簿")
+        } footer: {
+            Text("先に名簿を入れておくと、撮影中に名前が表示され、撮影後すぐにポスターを作れます。あとから入力／取り込み（Excel・CSV・写真）もできます。")
+                .font(.caption)
+        }
+    }
+
+    private var rosterEntered: Int {
+        (state.roster.students + state.roster.teachers)
+            .filter { !$0.furigana.isEmpty || !$0.name.isEmpty }.count
+    }
+    private var rosterStatusText: String {
+        let total = state.studentCount + state.teacherCount
+        return rosterEntered == 0
+            ? "未入力（撮影だけでも進められます）"
+            : "\(rosterEntered) / \(total) 名 入力済み"
     }
 
     // MARK: - モード切替
@@ -202,22 +253,61 @@ struct SetupView: View {
 
     // MARK: - 撮影開始
 
+    /// 撮影が既に始まっている（撮影済みが1人以上）か
+    private var captureInProgress: Bool {
+        state.shots.contains { $0.status != .pending }
+    }
+
     private var startSection: some View {
         Section {
-            Button {
-                state.startCapture()
-            } label: {
-                HStack {
-                    Spacer()
-                    Label("撮影をはじめる（\(state.studentCount)＋\(state.teacherCount)）",
-                          systemImage: "camera.fill")
-                        .font(.headline)
-                    Spacer()
+            if captureInProgress {
+                // 撮影中に設定を見に来たケース：データを保持して戻る
+                Button {
+                    state.resumeCapture()
+                } label: {
+                    HStack {
+                        Spacer()
+                        Label("撮影に戻る（済 \(state.capturedCount) 名）",
+                              systemImage: "camera.fill")
+                            .font(.headline)
+                        Spacer()
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!isReady)
+
+                Button {
+                    // 人数など設定変更を反映しつつ撮影済みは引き継ぐ
+                    state.startCapture()
+                } label: {
+                    HStack {
+                        Spacer()
+                        Text("この設定で撮影リストを更新する")
+                            .font(.subheadline)
+                        Spacer()
+                    }
+                }
+                .disabled(!isReady)
+                Text("人数や担任を変えたときはこちら。撮影済みの写真は番号ごとに引き継がれます。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Button {
+                    state.startCapture()
+                } label: {
+                    HStack {
+                        Spacer()
+                        Label("撮影をはじめる（\(state.studentCount)＋\(state.teacherCount)）",
+                              systemImage: "camera.fill")
+                            .font(.headline)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!isReady)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!isReady)
             if !isReady {
                 Text(notReadyReason)
                     .font(.caption)
