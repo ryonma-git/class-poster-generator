@@ -75,9 +75,6 @@ struct ReviewView: View {
     private var exportBanner: some View {
         VStack(spacing: 12) {
             Divider().padding(.bottom, 2)
-            Label("撮影が終わったら、ここから書き出します",
-                  systemImage: "square.and.arrow.up.on.square")
-                .font(.headline)
 
             // crop_adjuster 用パッケージ書き出し（独自拡張子 .cpcap）
             Button {
