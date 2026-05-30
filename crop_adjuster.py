@@ -16,6 +16,7 @@ import os, glob, re, csv, argparse, subprocess, threading, sys, platform, shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import font as tkfont
 
 # CustomTkinter（モダンスクロール対応）
 try:
@@ -71,6 +72,22 @@ def fix_exif(img):
     return img
 
 # ════════════════════════════════════════════════════════
+#  プロキシ（編集用の縮小画像）
+# ════════════════════════════════════════════════════════
+# 元写真は4000px超で重い。クロップ値は%指定で解像度非依存なので、
+# 編集・プレビュー・顔検出は縮小プロキシで行い、最終出力のみ実写真を使う。
+PROXY_MAX = 1500  # 長辺の最大px
+
+def make_proxy(img, max_dim=PROXY_MAX):
+    """長辺が max_dim を超える画像を縮小して返す。小さい画像はそのまま。"""
+    w, h = img.size
+    long_side = max(w, h)
+    if long_side <= max_dim:
+        return img.convert("RGB") if img.mode != "RGB" else img
+    s = max_dim / long_side
+    return img.resize((max(1, int(w*s)), max(1, int(h*s))), Image.LANCZOS).convert("RGB")
+
+# ════════════════════════════════════════════════════════
 #  顔検出
 # ════════════════════════════════════════════════════════
 _cascade = None
@@ -111,7 +128,31 @@ def detect_face(pil_img):
 # ════════════════════════════════════════════════════════
 #  クロップ計算
 # ════════════════════════════════════════════════════════
-CELL_ASPECT = 1.02  # PDFの実際の写真エリア比率（A2+6×7のデフォルトケース）
+def compute_photo_aspect(paper="A2", cols=6, rows=7):
+    """PDFの写真エリアの縦横比(cw/ph)を make_poster.py と完全に同じ式で計算する。
+    ★この計算は make_poster.py の generate_poster / レイアウト定数と一致させること。
+    プレビューと実PDFのクロップを一致させるための単一ソース。"""
+    MM = 72 / 25.4
+    A2_W, A2_H = 1190.55, 1683.78   # reportlab A2 (pt)
+    A1_W, A1_H = 1683.78, 2383.94   # reportlab A1 (pt)
+    MARGIN_X = 15*MM; MARGIN_TOP = 18*MM; MARGIN_BOT = 12*MM
+    HEADER_H = 25*MM; GAP_COL = 5*MM; GAP_ROW = 6*MM; LABEL_H = 18*MM
+    P = 150/72.0
+    if paper == "A1":
+        pw, ph = int(A1_W*P), int(A1_H*P)
+    else:
+        pw, ph = int(A2_W*P), int(A2_H*P)
+    mx = int(MARGIN_X*P); mt = int(MARGIN_TOP*P); mb = int(MARGIN_BOT*P)
+    hh = int(HEADER_H*P); gc = int(GAP_COL*P); gr = int(GAP_ROW*P); lh = int(LABEL_H*P)
+    cw = (pw - 2*mx - (cols-1)*gc) // cols
+    available_h = (ph - mt - hh - mb) - (rows-1)*gr
+    ch = available_h // rows
+    photo_h = ch - lh
+    return cw / photo_h
+
+# PDFの実際の写真エリア比率（A2 6×7 デフォルト）。make_poster.py と一致。
+# 旧 1.02 は近似値で、実際は約1.13。プレビューとPDFで顔の下が切れる不一致の原因だった。
+CELL_ASPECT = compute_photo_aspect("A2", 6, 7)
 
 def calc_crop_box(img_w, img_h, top_pct, left_pct, zoom):
     if img_w / img_h < CELL_ASPECT:
@@ -162,11 +203,21 @@ def auto_initial_crop_params(pil_img):
 # ════════════════════════════════════════════════════════
 #  プレビュー描画
 # ════════════════════════════════════════════════════════
-def render_clipping_preview(pil_img, top_pct, left_pct, zoom, max_w=420, max_h=560):
+def prepare_preview_base(pil_img, max_w=420, max_h=560):
+    """重いリサイズ処理。写真ロード時に1回だけ実行してキャッシュする。
+    戻り値を render_clipping_overlay に渡す。"""
     iw, ih = pil_img.size
     scale = min(max_w/iw, max_h/ih)
     dw, dh = int(iw*scale), int(ih*scale)
-    base = pil_img.resize((dw, dh), Image.LANCZOS).convert("RGB")
+    base_rgba = pil_img.resize((dw, dh), Image.LANCZOS).convert("RGBA")
+    return {"base_rgba": base_rgba, "scale": scale,
+            "iw": iw, "ih": ih, "dw": dw, "dh": dh}
+
+def render_clipping_overlay(pb, top_pct, left_pct, zoom, px_scale=1.0):
+    """キャッシュ済み基準画像(pb)にクロップ枠オーバーレイを描く軽い処理。
+    スライダー操作のたびに呼ばれる。px_scale は実写真px換算用の係数。"""
+    scale = pb["scale"]; iw = pb["iw"]; ih = pb["ih"]
+    dw = pb["dw"]; dh = pb["dh"]
     x1, y1, x2, y2 = calc_crop_box(iw, ih, top_pct, left_pct, zoom)
     bx1, by1 = int(x1*scale), int(y1*scale)
     bx2, by2 = int(x2*scale), int(y2*scale)
@@ -174,27 +225,38 @@ def render_clipping_preview(pil_img, top_pct, left_pct, zoom, max_w=420, max_h=5
     od = ImageDraw.Draw(overlay)
     od.rectangle([0,0,dw,dh], fill=(10,14,28,150))
     od.rectangle([bx1, by1, bx2, by2], fill=(0,0,0,0))
-    result = Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
+    result = Image.alpha_composite(pb["base_rgba"], overlay).convert("RGB")
     rd = ImageDraw.Draw(result)
     GOLD = (245, 175, 60)
-    rd.rectangle([bx1, by1, bx2-1, by2-1], outline=GOLD, width=3)
-    # 角ハンドル（クリック可能領域として大きめに描画）
+    # 金枠はクロップ領域の「外側」に描く（PILは座標から内向きに描くので、
+    # 座標を W だけ外へ広げると金枠の内縁＝クロップ境界になり、
+    # 「金枠の内側＝実際にクロップされる範囲」と見た目が一致する）
+    W = 3
+    fx1 = max(0, bx1 - W); fy1 = max(0, by1 - W)
+    fx2 = min(dw-1, bx2-1 + W); fy2 = min(dh-1, by2-1 + W)
+    rd.rectangle([fx1, fy1, fx2, fy2], outline=GOLD, width=W)
+    # 角ハンドル（金枠の角に配置）
     H = 16
     for cx, cy in [(bx1, by1), (bx2-1, by1), (bx1, by2-1), (bx2-1, by2-1)]:
-        # 白い丸＋金色の縁取り（つかみやすい見た目）
         rd.ellipse([cx-H//2, cy-H//2, cx+H//2, cy+H//2],
                    fill=(255,255,255), outline=GOLD, width=3)
-    info = f"crop: {x2-x1}×{y2-y1} px"
+    # クロップサイズは実写真の解像度で表示（px_scale で換算）
+    real_w = int((x2-x1) * px_scale); real_h = int((y2-y1) * px_scale)
+    info = f"crop: {real_w}×{real_h} px"
     f = get_pil_font(13)
     bb = rd.textbbox((0,0), info, font=f)
     rd.rectangle([6, 6, bb[2]+18, bb[3]+14], fill=(0,0,0,180))
     rd.text((12, 10), info, font=f, fill=(255,255,255))
-    # コーナー位置も返す
     corners = {
         "tl": (bx1, by1), "tr": (bx2-1, by1),
         "bl": (bx1, by2-1), "br": (bx2-1, by2-1)
     }
     return result, scale, (bx1, by1, bx2, by2), corners
+
+# 後方互換：一括描画版（バッチエディタ等から使用）
+def render_clipping_preview(pil_img, top_pct, left_pct, zoom, max_w=420, max_h=560):
+    pb = prepare_preview_base(pil_img, max_w, max_h)
+    return render_clipping_overlay(pb, top_pct, left_pct, zoom)
 
 # ── ポスターセル ──
 C_CARD    = (0xF7, 0xF9, 0xFC)
@@ -204,8 +266,9 @@ C_NUM_FG  = (0xE8, 0x9C, 0x2A)
 C_ACCENT  = (0xE8, 0x9C, 0x2A)
 
 def render_poster_cell(cropped_img, num, name, cell_w=240):
-    # PDFと同じ比率：写真ほぼ正方形（cw:photo_h ≈ 1.02）+ ラベル下
-    photo_h = int(cell_w / 1.02)
+    # PDFと同じ写真比率（CELL_ASPECT）。ここを固定値にするとクロップ枠と
+    # ポスタープレビューで縦横比がズレて写真が伸びて見えるので必ず CELL_ASPECT を使う
+    photo_h = int(cell_w / CELL_ASPECT)
     label_h = int(cell_w * 0.19)
     cell_h = photo_h + label_h
     R = 14
@@ -244,6 +307,50 @@ def render_poster_cell(cropped_img, num, name, cell_w=240):
     cell.paste(lbl_a, (0, photo_h), lbl_a)
     ImageDraw.Draw(cell).line([(0,photo_h),(cell_w,photo_h)], fill=C_ACCENT+(220,), width=3)
     return cell
+
+# ── 個別IDカード画像（顔写真＋学年組番号＋漢字名＋ふりがな）──
+def render_id_card(cropped_img, grade, cls, num, kanji, kana, card_w=640):
+    """1人分の顔写真カードを生成。行方不明児童の捜索などに使う。
+    cropped_img は実写真からクロップ済みの高解像度画像を渡す。"""
+    margin = int(card_w * 0.04)
+    photo_w = card_w - margin * 2
+    photo_h = int(photo_w / CELL_ASPECT)
+    info_h = int(card_w * 0.30)
+    card_h = margin + photo_h + info_h + margin
+    # 背景（白カード＋薄い枠）
+    card = Image.new("RGB", (card_w, card_h), (255, 255, 255))
+    cd = ImageDraw.Draw(card)
+    cd.rectangle([0, 0, card_w-1, card_h-1], outline=(210, 216, 226), width=2)
+    # 顔写真
+    photo = cropped_img.resize((photo_w, photo_h), Image.LANCZOS).convert("RGB")
+    card.paste(photo, (margin, margin))
+    cd.rectangle([margin, margin, margin+photo_w-1, margin+photo_h-1],
+                 outline=(180, 188, 200), width=1)
+    # 情報エリア
+    ix = margin
+    iy = margin + photo_h + int(info_h * 0.10)
+    # 学年組番号（アクセント色）
+    f_meta = get_pil_font(int(info_h * 0.26))
+    meta = f"{grade}年 {cls}組  {num}番"
+    cd.text((ix, iy), meta, font=f_meta, fill=C_LBL_BG)
+    # ふりがな（小）
+    iy2 = iy + int(info_h * 0.30)
+    if kana:
+        f_kana = get_pil_font(int(info_h * 0.20))
+        cd.text((ix, iy2), kana, font=f_kana, fill=(110, 120, 135))
+    # 漢字名（大）
+    iy3 = iy2 + int(info_h * 0.22)
+    kanji_disp = kanji or f"{num}番"
+    f_name = get_pil_font(int(info_h * 0.34))
+    # はみ出すなら縮小
+    avail = card_w - margin * 2
+    while True:
+        bb = cd.textbbox((0, 0), kanji_disp, font=f_name)
+        if bb[2]-bb[0] <= avail or f_name.size <= 16:
+            break
+        f_name = get_pil_font(f_name.size - 2)
+    cd.text((ix, iy3), kanji_disp, font=f_name, fill=(30, 36, 46))
+    return card
 
 # ── クラス全員サムネ ──
 def render_class_overview(class_items, current_num=None, max_w=560, thumb_w=110):
@@ -290,6 +397,65 @@ def render_class_overview(class_items, current_num=None, max_w=560, thumb_w=110)
                font=f_nm, fill=(50, 50, 70), anchor="ra")
     return img
 
+# ── クラス顔写真一覧シート（名簿風・名前/ふりがな付き、出力用）──
+def render_roster_sheet(grade, cls, items, cols=6, thumb_w=180):
+    """クラス全員を1枚にまとめた一覧シートを生成。
+    items: [(num, kanji, kana, cropped_img_or_None), ...]
+    名簿・連絡網・行方不明時の確認などに使える高解像度シート。"""
+    pad = 16
+    title_h = 70
+    thumb_h = int(thumb_w / CELL_ASPECT)
+    name_h = 56
+    cell_w = thumb_w + pad
+    cell_h = thumb_h + name_h + pad
+    rows = max(1, (len(items) + cols - 1) // cols)
+    canvas_w = cols * cell_w + pad
+    canvas_h = title_h + rows * cell_h + pad
+    img = Image.new("RGB", (canvas_w, canvas_h), (248, 249, 251))
+    d = ImageDraw.Draw(img)
+    # タイトル帯
+    d.rectangle([0, 0, canvas_w, title_h], fill=C_LBL_BG)
+    f_title = get_pil_font(30)
+    d.text((pad+6, title_h//2), f"{grade}年 {cls}組  顔写真一覧",
+           font=f_title, fill=(255, 255, 255), anchor="lm")
+    f_cnt = get_pil_font(16)
+    d.text((canvas_w-pad-6, title_h//2), f"{len(items)}名",
+           font=f_cnt, fill=(210, 224, 240), anchor="rm")
+    for idx, (num, kanji, kana, cropped) in enumerate(items):
+        col = idx % cols; row = idx // cols
+        x = pad + col * cell_w
+        y = title_h + pad + row * cell_h
+        d.rounded_rectangle([x, y, x+thumb_w, y+thumb_h+name_h],
+                            radius=10, fill=(255, 255, 255),
+                            outline=(220, 226, 236), width=1)
+        if cropped is not None:
+            try:
+                t = cropped.resize((thumb_w-6, thumb_h-6), Image.LANCZOS)
+                img.paste(t.convert("RGB"), (x+3, y+3))
+            except Exception:
+                pass
+        # 番号バッジ
+        f_num = get_pil_font(18)
+        d.text((x+8, y+thumb_h+6), f"{num:02d}", font=f_num, fill=C_NUM_FG)
+        # 漢字名
+        f_nm = get_pil_font(17)
+        kanji_disp = kanji or f"{num}番"
+        avail = thumb_w - 10
+        while True:
+            bb = d.textbbox((0,0), kanji_disp, font=f_nm)
+            if bb[2]-bb[0] <= avail or f_nm.size <= 11:
+                break
+            f_nm = get_pil_font(f_nm.size - 1)
+        d.text((x+thumb_w-8, y+thumb_h+8), kanji_disp,
+               font=f_nm, fill=(30, 36, 46), anchor="ra")
+        # ふりがな
+        if kana:
+            f_kn = get_pil_font(11)
+            kana_disp = kana if len(kana) <= 14 else kana[:13]+"…"
+            d.text((x+thumb_w-8, y+thumb_h+32), kana_disp,
+                   font=f_kn, fill=(120, 130, 145), anchor="ra")
+    return img
+
 # ════════════════════════════════════════════════════════
 #  名簿・写真関連
 # ════════════════════════════════════════════════════════
@@ -322,10 +488,15 @@ def collect_photos(folder, grade, cls):
             candidates[num] = (p, full)
     return {num: path for num, (_, path) in candidates.items()}
 
+# クラス探索で無視するフォルダ（出力物などがクラスとして誤検出されるのを防ぐ）
+_SKIP_DIRS = {"output", "crop_check", "顔写真", "__pycache__", ".git"}
+
 def find_class_folder(base, grade, cls):
     """{grade}年{cls}組のフォルダを探す。複数候補があれば写真がある方を優先"""
     candidates = []
     for root, dirs, files in os.walk(base):
+        # 出力フォルダ等を探索から除外
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
         name = Path(root).name
         # 「N年M組」形式
         m = re.search(r'(\d+)\s*年\s*(\d+)\s*組', name)
@@ -348,6 +519,8 @@ def find_class_folder(base, grade, cls):
 def find_all_classes(base):
     results = []
     for root, dirs, files in os.walk(base):
+        # 出力フォルダ等を探索から除外
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
         if not any(f.lower().endswith(('.jpg','.jpeg','.png','.heic')) for f in files):
             continue
         parts = Path(os.path.relpath(root, base)).parts
@@ -388,6 +561,38 @@ def load_master_roster(path):
         result.setdefault((row["学年"], row["組"]), {})[row["番号"]] = row["氏名"]
     return result
 
+def load_full_roster(path):
+    """漢字名・ふりがな両方を読み込む（検索・画像出力用）。
+    戻り値: {(学年,組): {番号: {"kanji": 漢字名, "kana": ふりがな}}}
+    col16=名前(漢字), col17=ふりがな"""
+    import pandas as pd
+    try:
+        ext = Path(path).suffix.lower()
+        if ext == '.xls':
+            import xlrd
+            wb = xlrd.open_workbook(path)
+            ws = wb.sheet_by_index(0)
+            rows = [ws.row_values(i) for i in range(ws.nrows)]
+            df = pd.DataFrame(rows[1:], columns=rows[0])
+        else:
+            df = pd.read_excel(path, header=0)
+        sub = df.iloc[:, [2, 3, 4, 16, 17]].copy()
+        sub.columns = ["学年", "組", "番号", "漢字", "かな"]
+        sub = sub.dropna(subset=["学年", "組", "番号"])
+        sub["学年"] = sub["学年"].astype(int)
+        sub["組"] = sub["組"].astype(int)
+        sub["番号"] = sub["番号"].astype(int)
+        # 全角スペースを半角に統一して見やすく
+        sub["漢字"] = sub["漢字"].fillna("").astype(str).str.strip().str.replace("　", " ")
+        sub["かな"] = sub["かな"].fillna("").astype(str).str.strip().str.replace("　", " ")
+        result = {}
+        for _, row in sub.iterrows():
+            result.setdefault((row["学年"], row["組"]), {})[row["番号"]] = {
+                "kanji": row["漢字"], "kana": row["かな"]}
+        return result
+    except Exception:
+        return {}
+
 def find_roster_file(base):
     candidates = [f for f in
         glob.glob(os.path.join(base, "*.xls")) +
@@ -421,74 +626,136 @@ def save_overrides(path, d):
 # ════════════════════════════════════════════════════════
 #  デザインパレット (Apple風)
 # ════════════════════════════════════════════════════════
+# Swiss Grid × 和文機能美（時間割アプリ timetable-web 由来）
+# Primary=Indigo / Accent=Amber / Base=Slate
 PALETTE = {
-    "bg":         "#f5f5f7",   # macOSの典型的な背景色
-    "panel":      "#ffffff",   # カード（純白）
-    "panel_alt":  "#fafaf7",   # 副カード
-    "input_bg":   "#fafaf7",
-    "text":       "#1d1d1f",   # iOS の primary text
-    "text_strong":"#000000",
-    "text_dim":   "#6e6e73",   # iOS の secondary
-    "text_label": "#3a3a3c",
-    "accent":     "#ff9500",   # iOS Orange
-    "accent_bg":  "#fff4e0",
-    "accent_dk":  "#cc7700",
-    "primary":    "#0a84ff",   # iOS Blue
-    "primary_bg": "#e6f0ff",
-    "primary_dk": "#0066cc",
-    "success":    "#34c759",   # iOS Green
-    "success_dk": "#28a745",
-    "danger":     "#ff3b30",   # iOS Red
-    "danger_dk":  "#cc2922",
-    "border":     "#d2d2d7",
-    "border_active":"#c5c5cc",
-    "neutral":    "#e5e5ea",   # 軽量グレー（ボタン背景用）
-    "neutral_dk": "#d1d1d6",
+    "bg":          "#f4f6fa",   # slate 背景
+    "panel":       "#ffffff",   # 白カード
+    "panel_alt":   "#f5f7fb",   # 副カード（薄スレート）
+    "input_bg":    "#f5f7fb",
+    "text":        "#1a1f2b",   # slate-900 寄り
+    "text_strong": "#0d1018",
+    "text_dim":    "#6b7280",   # slate-500
+    "text_label":  "#3b4250",   # slate-700
+    "accent":      "#e2952b",   # amber アクセント
+    "accent_bg":   "#fdf3dc",   # amber-50
+    "accent_dk":   "#a96b10",   # amber-700（文字用）
+    "primary":     "#3a56d4",   # indigo
+    "primary_bg":  "#e9edfc",   # indigo-50
+    "primary_dk":  "#2c43b0",   # indigo（hover/濃）
+    "success":     "#1aa353",   # green
+    "success_dk":  "#15833f",
+    "danger":      "#e2483d",   # red
+    "danger_dk":   "#c0392e",
+    "border":      "#e2e6ee",   # slate-200
+    "border_active":"#c7cdd9",
+    "neutral":     "#eef1f6",   # 軽量グレー（ボタン背景用）
+    "neutral_dk":  "#e2e6ee",
 }
 
 # ════════════════════════════════════════════════════════
 #  カスタムボタン（macOS対応）
 # ════════════════════════════════════════════════════════
-class MacButton(tk.Frame):
-    """tk.Buttonの色問題を回避するLabelベースのカスタムボタン"""
+def _shade(hex_color, amt):
+    """amt<0 で暗く、amt>0 で明るく。"""
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+    if amt < 0:
+        f = 1 + amt
+        r, g, b = int(r*f), int(g*f), int(b*f)
+    else:
+        r = int(r + (255-r)*amt); g = int(g + (255-g)*amt); b = int(b + (255-b)*amt)
+    clamp = lambda v: max(0, min(255, v))
+    return f'#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}'
+
+def _luminance(hex_color):
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+    return (0.299*r + 0.587*g + 0.114*b) / 255.0
+
+def _draw_round_rect(canvas, x1, y1, x2, y2, r, **kw):
+    r = max(0, min(r, (x2-x1)//2, (y2-y1)//2))
+    pts = [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r,
+           x2, y2-r, x2, y2, x2-r, y2, x1+r, y2,
+           x1, y2, x1, y2-r, x1, y1+r, x1, y1]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+class MacButton(tk.Canvas):
+    """角丸のモダンなボタン（Canvasベース）。
+    旧Labelベースから互換APIを維持（.bg / set_text / configure(bg=)）。"""
     def __init__(self, parent, text, command, bg, fg, hover_bg=None,
-                 font=("",12,"bold"), padx=14, pady=8, **kw):
-        super().__init__(parent, bg=bg, cursor="hand2",
-                        highlightthickness=0, **kw)
+                 font=("",12,"bold"), padx=14, pady=8, radius=11,
+                 parent_bg=None, border=None, **kw):
+        if parent_bg is None:
+            try:
+                parent_bg = parent.cget("bg")
+            except Exception:
+                parent_bg = PALETTE["panel"]
+        self._pbg = parent_bg
         self.command = command
         self.bg = bg
-        self.hover_bg = hover_bg or self._lighten(bg, 0.92)
-        self.label = tk.Label(self, text=text, bg=bg, fg=fg,
-                              font=font, padx=padx, pady=pady,
-                              cursor="hand2")
-        self.label.pack()
-        for w in (self, self.label):
-            w.bind("<Button-1>", self._click)
-            w.bind("<Enter>", self._enter)
-            w.bind("<Leave>", self._leave)
-
-    def _lighten(self, hex_color, factor):
-        h = hex_color.lstrip('#')
-        r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
-        if factor < 1.0:
-            r, g, b = int(r*factor), int(g*factor), int(b*factor)
+        self.fg = fg
+        self.hover_bg = hover_bg or _shade(bg, -0.07)
+        self.text = text
+        self.font = font
+        self.radius = radius
+        # 明るいボタンには輪郭線を付けて締まりを出す
+        if border is not None:
+            self.border = border
+        elif _luminance(bg) > 0.82:
+            self.border = PALETTE["border"]
         else:
-            r = min(255, int(r + (255-r)*(factor-1)))
-            g = min(255, int(g + (255-g)*(factor-1)))
-            b = min(255, int(b + (255-b)*(factor-1)))
-        return f'#{r:02x}{g:02x}{b:02x}'
+            self.border = None
+        self._padx = padx; self._pady = pady
+        # テキスト寸法を測って初期サイズを決定
+        f = tkfont.Font(font=font)
+        tw = f.measure(text); th = f.metrics("linespace")
+        w = tw + padx*2; h = th + pady*2
+        super().__init__(parent, width=w, height=h, bg=parent_bg,
+                         highlightthickness=0, bd=0, takefocus=0, **kw)
+        # 注意: self._w / self._h は tkinter のウィジェットパス内部属性なので使わない
+        self._bw = w; self._bh = h
+        self._hover = False
+        self.bind("<Configure>", self._redraw)
+        self.bind("<Button-1>", self._click)
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self._redraw()
+
+    def _redraw(self, event=None):
+        self.delete("all")
+        w = event.width if event is not None else (self.winfo_width() or self._bw)
+        h = event.height if event is not None else (self.winfo_height() or self._bh)
+        if w <= 1: w = self._bw
+        if h <= 1: h = self._bh
+        fill = self.hover_bg if self._hover else self.bg
+        outline = self.border if self.border else fill
+        _draw_round_rect(self, 1, 1, w-1, h-1, self.radius,
+                         fill=fill, outline=outline, width=1)
+        self.create_text(w//2, h//2, text=self.text, fill=self.fg, font=self.font)
 
     def _click(self, e):
         if self.command: self.command()
     def _enter(self, e):
-        self.configure(bg=self.hover_bg)
-        self.label.configure(bg=self.hover_bg)
+        self._hover = True; self.configure(cursor="hand2"); self._redraw()
     def _leave(self, e):
-        self.configure(bg=self.bg)
-        self.label.configure(bg=self.bg)
+        self._hover = False; self._redraw()
 
+    # ── 互換API ──
     def set_text(self, text):
-        self.label.configure(text=text)
+        self.text = text; self._redraw()
+    def set_style(self, bg=None, fg=None, hover_bg=None):
+        if bg: self.bg = bg; self.hover_bg = hover_bg or _shade(bg, -0.07)
+        if fg: self.fg = fg
+        self._redraw()
+    def configure(self, **kw):
+        if 'bg' in kw and 'highlightthickness' not in kw and 'bd' not in kw:
+            self.bg = kw.pop('bg'); self.hover_bg = _shade(self.bg, -0.07)
+            self._redraw()
+        if kw:
+            try: super().configure(**kw)
+            except tk.TclError: pass
+    config = configure
 
 # ════════════════════════════════════════════════════════
 #  GUI 本体
@@ -504,12 +771,19 @@ class CropAdjusterApp:
         self.classes_list  = find_all_classes(base)
         self.roster_path   = find_roster_file(base)
         self.roster_data   = load_master_roster(self.roster_path) if self.roster_path else {}
+        self.roster_full   = load_full_roster(self.roster_path) if self.roster_path else {}
 
-        self.current_img      = None
+        self.current_img      = None   # 編集用プロキシ（縮小画像）
         self.current_key      = None
+        self.current_orig_size = None  # 実写真の解像度 (w,h)
+        self._preview_base    = None   # キャッシュ済みプレビュー基準画像
+        self._px_scale        = 1.0
         self.photos           = {}
         self.photo_nums       = []
         self.auto_initial     = (0.0, 0.0, 1.0)
+        # プロキシ＆顔検出結果のメモリキャッシュ（前/次ナビを高速化）
+        # path -> (proxy_img, auto_initial, orig_size)
+        self._proxy_cache     = {}
 
         self._update_pending = False
         self._dragging = False
@@ -575,14 +849,16 @@ class CropAdjusterApp:
         root = self.root
 
         # ─── ヘッダー ───
-        header = tk.Frame(root, bg=PALETTE["primary"], height=52)
+        header = tk.Frame(root, bg=PALETTE["primary"], height=54)
         header.pack(fill="x"); header.pack_propagate(False)
         tk.Label(header, text="クロップ調整ツール",
                  bg=PALETTE["primary"], fg="#ffffff",
                  font=self._font(15, True)).pack(side="left", padx=22, pady=12)
         tk.Label(header, text="個人写真ポスター",
-                 bg=PALETTE["primary"], fg="#cce4ff",
+                 bg=PALETTE["primary"], fg="#c3cdf5",
                  font=self._font(11)).pack(side="left", pady=12)
+        # 下部にアンバーのアクセントライン（Swiss grid × amber）
+        tk.Frame(root, bg=PALETTE["accent"], height=3).pack(fill="x")
 
         # ─── 上部入力エリア（カード）───
         topbar_wrap = tk.Frame(root, bg=BG)
@@ -627,7 +903,20 @@ class CropAdjusterApp:
         open_btn = MacButton(topbar_inner, "開く", self.open_photo,
                             bg=PALETTE["primary"], fg="#ffffff",
                             font=self._font(12, True), padx=22, pady=6)
-        open_btn.pack(side="left", padx=(16,12), pady=15)
+        open_btn.pack(side="left", padx=(16,8), pady=15)
+
+        # 名前で検索ボタン
+        search_btn = MacButton(topbar_inner, "🔍 名前で検索", self.show_search,
+                            bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                            font=self._font(12, True), padx=16, pady=6)
+        search_btn.pack(side="left", padx=(0,8), pady=15)
+
+        # 撮影データ取り込みボタン（撮影アプリのZIPを読み込んで写真+overrides+担任を反映）
+        import_btn = MacButton(topbar_inner, "📥 撮影データを取り込み",
+                            self.import_capture_zip,
+                            bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
+                            font=self._font(12, True), padx=16, pady=6)
+        import_btn.pack(side="left", padx=(0,12), pady=15)
 
         # 件数バッジ
         self.saved_var = tk.StringVar(value=f"調整済み {len(self.overrides)}件")
@@ -647,20 +936,30 @@ class CropAdjusterApp:
         MacButton(zoom_frame, "＋", self._scale_up, bg=PALETTE["neutral"],
                  fg=TEXT, font=self._font(12, True), padx=8, pady=4).pack(side="left", padx=2)
 
-        # ─── メイン領域（CTkScrollableFrameで完璧なスクロール）───
-        if HAS_CTK:
-            self._main_scroll = ctk.CTkScrollableFrame(
-                root, fg_color=BG,
-                scrollbar_button_color="#a0a0a0",
-                scrollbar_button_hover_color="#606060",
-                scrollbar_fg_color="transparent"
-            )
-            self._main_scroll.pack(fill="both", expand=True, padx=14, pady=12)
-            main = tk.Frame(self._main_scroll, bg=BG)
-            main.pack(fill="both", expand=True)
-        else:
-            main = tk.Frame(root, bg=BG)
-            main.pack(fill="both", expand=True, padx=14, pady=12)
+        # ─── メイン領域（tk.Canvas+Scrollbar で確実にスクロール）───
+        # CTkScrollableFrame は子ウィジェット上でホイールが効かない問題が
+        # あったため、自前のCanvasスクローラに置き換え。
+        scroll_wrap = tk.Frame(root, bg=BG)
+        scroll_wrap.pack(fill="both", expand=True, padx=14, pady=12)
+        # yscrollincrement=1 で 1unit=1px に固定（マウス/トラックパッドの
+        # スクロール量をハンドラ側でpx単位に正確に制御する）
+        self._main_canvas = tk.Canvas(scroll_wrap, bg=BG, highlightthickness=0,
+                                      yscrollincrement=1)
+        vsb = ttk.Scrollbar(scroll_wrap, orient="vertical",
+                            command=self._main_canvas.yview)
+        self._main_canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self._main_canvas.pack(side="left", fill="both", expand=True)
+        main = tk.Frame(self._main_canvas, bg=BG)
+        self._main_win = self._main_canvas.create_window((0, 0), window=main,
+                                                         anchor="nw")
+        def _on_inner_config(e):
+            self._main_canvas.configure(scrollregion=self._main_canvas.bbox("all"))
+        main.bind("<Configure>", _on_inner_config)
+        def _on_canvas_config(e):
+            # 横幅はキャンバスに合わせる（中央列が広がるように）
+            self._main_canvas.itemconfigure(self._main_win, width=e.width)
+        self._main_canvas.bind("<Configure>", _on_canvas_config)
 
         # 3列レイアウト（grid）
         main.grid_rowconfigure(0, weight=1)
@@ -733,10 +1032,11 @@ class CropAdjusterApp:
                     ).pack(side="left")
             scale = tk.Scale(row, from_=frm, to=to, resolution=resolution,
                              orient="horizontal", variable=var, length=380,
-                             bg=PANEL, fg=STRONG,
-                             troughcolor=PALETTE["panel_alt"],
-                             highlightthickness=0, relief="flat",
-                             activebackground=PALETTE["accent"],
+                             bg=PANEL, fg=PALETTE["primary_dk"],
+                             troughcolor=PALETTE["primary_bg"],
+                             highlightthickness=0, relief="flat", bd=1,
+                             sliderrelief="flat",
+                             activebackground=PALETTE["primary"],
                              showvalue=True, font=self._font(10, True),
                              command=self._on_slide, takefocus=0)
             scale.pack(side="left", fill="x", expand=True)
@@ -793,18 +1093,25 @@ class CropAdjusterApp:
         #   将来は「クラス全員プレビュー上で個別データを直接編集できる画面」を実装予定。
         # ----------------------------------------------------------
 
-        tk.Label(right, text="ACTIONS", bg=PANEL, fg=DIM,
-                 font=self._font(10, True), anchor="w"
-                ).pack(fill="x", padx=14, pady=(20,4))
+        def _section(title):
+            row = tk.Frame(right, bg=PANEL)
+            row.pack(fill="x", padx=14, pady=(18, 6))
+            tk.Frame(row, bg=PALETTE["primary"], width=3, height=14).pack(
+                side="left", padx=(0, 8))
+            tk.Label(row, text=title, bg=PANEL, fg=PALETTE["text_label"],
+                     font=self._font(10, True), anchor="w").pack(side="left")
+
+        # ── ポスター作成（メイン機能）──
+        _section("ポスター作成")
 
         self.v_auto_pdf = tk.BooleanVar(value=False)
         tk.Checkbutton(right, text="保存時にPDF自動再生成",
                        variable=self.v_auto_pdf,
                        bg=PANEL, fg=TEXT, selectcolor=PALETTE["panel_alt"],
                        activebackground=PANEL, activeforeground=TEXT,
-                       font=self._font(10, True), anchor="w",
+                       font=self._font(10), anchor="w",
                        highlightthickness=0, takefocus=0
-                      ).pack(fill="x", padx=14, pady=2, anchor="w")
+                      ).pack(fill="x", padx=16, pady=(0,6), anchor="w")
 
         MacButton(right, "現クラスのPDF再生成", self.regen_current_class,
                  bg=PALETTE["primary"], fg="#ffffff",
@@ -812,33 +1119,49 @@ class CropAdjusterApp:
                 ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "全クラスPDF再生成", self.regen_all,
-                 bg=PALETTE["accent"], fg="#ffffff",
-                 font=self._font(11, True), padx=10, pady=10
+                 bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
+                 font=self._font(11, True), padx=10, pady=9
                 ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "🖼 クラス全員のプレビュー", self.show_class_overview,
-                 bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
-                 font=self._font(11, True), padx=10, pady=10
-                ).pack(fill="x", padx=14, pady=(12,4))
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
+                ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "✏️ クラス一括調整", self.show_batch_editor,
-                 bg=PALETTE["primary"], fg="#ffffff",
-                 font=self._font(11, True), padx=10, pady=10
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
                 ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "🎨 デザイン設定", self.show_design_editor,
-                 bg=PALETTE["accent"], fg="#ffffff",
-                 font=self._font(11, True), padx=10, pady=10
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
                 ).pack(fill="x", padx=14, pady=4)
 
         MacButton(right, "⚙ 出力ウィザード", self.show_wizard,
-                 bg=PALETTE["primary_bg"], fg=PALETTE["primary_dk"],
-                 font=self._font(11, True), padx=10, pady=10
+                 bg=PALETTE["neutral"], fg=TEXT,
+                 font=self._font(11, True), padx=10, pady=9
                 ).pack(fill="x", padx=14, pady=4)
 
-        tk.Label(right, text="SHORTCUTS", bg=PANEL, fg=DIM,
-                 font=self._font(10, True), anchor="w"
-                ).pack(fill="x", padx=14, pady=(20,4))
+        # ── 顔写真の画像出力（補助機能・最下部）──
+        _section("顔写真の画像出力")
+
+        MacButton(right, "📸 この生徒の写真を出力", self.export_current_student,
+                 bg=PALETTE["accent"], fg="#ffffff",
+                 font=self._font(11, True), padx=10, pady=9
+                ).pack(fill="x", padx=14, pady=4)
+
+        MacButton(right, "📁 クラス全員を個別出力", self.export_class_all,
+                 bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                 font=self._font(11), padx=10, pady=8
+                ).pack(fill="x", padx=14, pady=3)
+
+        MacButton(right, "📋 クラス一覧シートを出力", self.export_roster_sheet,
+                 bg=PALETTE["accent_bg"], fg=PALETTE["accent_dk"],
+                 font=self._font(11), padx=10, pady=8
+                ).pack(fill="x", padx=14, pady=3)
+
+        _section("SHORTCUTS")
         sc = ("↑↓←→        枠を移動\n"
               "Shift+↑↓     ズーム\n"
               "[  ]          前 / 次（自動保存）\n"
@@ -875,48 +1198,110 @@ class CropAdjusterApp:
         """互換性のため残す（実体は _setup_wheel_bindings）"""
         pass
 
-    def _setup_wheel_bindings(self):
-        """全子ウィジェットにマウスホイールイベントを再帰的にbind
-        CTkScrollableFrame の内部Canvas を使って確実にスクロール"""
-        if not hasattr(self, "_main_scroll") or not HAS_CTK:
-            return
-        # CTkScrollableFrame の内部Canvas を取得
+    # ── マウスホイールスクロール（トップレベル単位でスクロール先を振り分け）──
+    def _register_wheel(self, toplevel, canvas):
+        """ウィンドウ(toplevel)上でのホイール操作を canvas に向ける。
+        モーダルもこれを使えば、メインのバインドを壊さず共存できる。"""
+        if not hasattr(self, "_wheel_targets"):
+            self._wheel_targets = {}
+        self._wheel_targets[str(toplevel)] = canvas
+
+    def _unregister_wheel(self, toplevel):
+        if hasattr(self, "_wheel_targets"):
+            self._wheel_targets.pop(str(toplevel), None)
+
+    def _target_canvas(self, event):
+        """イベント発生ウィジェットの属するウィンドウのスクロール先Canvasを返す。
+        Listbox/Text 上は各自のスクロールに任せるため None を返す。"""
         try:
-            inner_canvas = self._main_scroll._parent_canvas
-        except AttributeError:
+            tl = event.widget.winfo_toplevel()
+        except Exception:
+            return None
+        canvas = getattr(self, "_wheel_targets", {}).get(str(tl))
+        if canvas is None:
+            return None
+        try:
+            if isinstance(event.widget, (tk.Listbox, tk.Text)):
+                return None
+        except Exception:
+            pass
+        return canvas
+
+    def _wheel_scroll(self, event, direction=None):
+        """マウスホイール（<MouseWheel> / Button-4,5）用。1ノッチ≒40px。"""
+        canvas = self._target_canvas(event)
+        if canvas is None:
             return
+        if direction is not None:
+            notches = direction
+        else:
+            d = getattr(event, "delta", 0)
+            if d == 0:
+                return
+            # Tk 9.0 は概ね 120 単位/ノッチ。小さい値はそのままノッチ扱い。
+            notches = -(d / 120.0) if abs(d) >= 120 else -float(d)
+        px = int(round(notches * 40)) or (40 if notches > 0 else -40)
+        try:
+            canvas.yview_scroll(px, "units")   # yscrollincrement=1 なので px 単位
+        except Exception:
+            pass
+        return "break"
 
-        def _on_wheel(event):
-            if IS_MAC:
-                step = -1 * int(event.delta)
-            else:
-                step = -1 * int(event.delta / 120)
-            if step == 0:
-                step = -1 if event.delta > 0 else 1
-            inner_canvas.yview_scroll(step, "units")
-            return "break"
-
-        def _bind_recursive(widget):
+    def _touchpad_scroll(self, event):
+        """トラックパッド（Tk 9.0 の <TouchpadScroll>）用。"""
+        canvas = self._target_canvas(event)
+        if canvas is None:
+            return
+        try:
+            dx, dy = self.root.tk.call("tk::PreciseScrollDeltas", event.delta)
+            dy = int(dy)
+        except Exception:
+            return
+        if dy:
             try:
-                widget.bind("<MouseWheel>", _on_wheel, add="+")
-                widget.bind("<Button-4>",
-                    lambda e: (inner_canvas.yview_scroll(-1, "units"), "break")[1], add="+")
-                widget.bind("<Button-5>",
-                    lambda e: (inner_canvas.yview_scroll(1, "units"), "break")[1], add="+")
-            except: pass
-            for child in widget.winfo_children():
-                _bind_recursive(child)
+                canvas.yview_scroll(-dy * 2, "units")  # px単位（係数2は感度）
+            except Exception:
+                pass
+        return "break"
 
-        # CTkScrollableFrame全体と全子ウィジェット
-        _bind_recursive(self._main_scroll)
-        # 内部Canvas自体にも
+    def _setup_wheel_bindings(self):
+        """メイン領域のスクロールを設定。グローバルハンドラは1回だけbind_allし、
+        スクロール先は _wheel_targets でウィンドウ単位に振り分ける。"""
+        if not hasattr(self, "_main_canvas"):
+            return
+        # メインウィンドウのスクロール先を登録（再構築のたびに最新Canvasへ更新）
+        self._register_wheel(self.root, self._main_canvas)
+        # グローバルハンドラは一度だけbind（重複バインド防止）
+        if not getattr(self, "_wheel_bound", False):
+            self.root.bind_all("<MouseWheel>", self._wheel_scroll, add="+")
+            self.root.bind_all("<Button-4>",
+                               lambda e: self._wheel_scroll(e, -1), add="+")
+            self.root.bind_all("<Button-5>",
+                               lambda e: self._wheel_scroll(e, 1), add="+")
+            # Tk 9.0: トラックパッドは <TouchpadScroll> で届く
+            try:
+                self.root.bind_all("<TouchpadScroll>", self._touchpad_scroll, add="+")
+            except tk.TclError:
+                pass
+            self._wheel_bound = True
+        # bind_all だけだと環境によりコンテンツ上でホイールを拾えないことがあるため、
+        # メイン領域の全ウィジェットに直接バインドする（確実にどこでも効く）
+        self._bind_wheel_to_tree(self._main_canvas)
+
+    def _bind_wheel_to_tree(self, widget):
+        """widget とその全子孫に直接ホイール/トラックパッドをバインドする。"""
         try:
-            inner_canvas.bind("<MouseWheel>", _on_wheel, add="+")
-            inner_canvas.bind("<Button-4>",
-                lambda e: (inner_canvas.yview_scroll(-1, "units"), "break")[1], add="+")
-            inner_canvas.bind("<Button-5>",
-                lambda e: (inner_canvas.yview_scroll(1, "units"), "break")[1], add="+")
-        except: pass
+            widget.bind("<MouseWheel>", self._wheel_scroll, add="+")
+            widget.bind("<Button-4>", lambda e: self._wheel_scroll(e, -1), add="+")
+            widget.bind("<Button-5>", lambda e: self._wheel_scroll(e, 1), add="+")
+            try:
+                widget.bind("<TouchpadScroll>", self._touchpad_scroll, add="+")
+            except tk.TclError:
+                pass
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            self._bind_wheel_to_tree(child)
 
     # ── 画面拡大縮小 ──
     def _scale_up(self):
@@ -1158,6 +1543,18 @@ class CropAdjusterApp:
         self.open_photo()
         self.root.focus_set()
 
+    def _select_class_in_list(self, g, c):
+        """クラス一覧(listbox)で(g,c)を選択状態にする。検索からの遷移用。"""
+        for i, (cg, cc, _) in enumerate(self.classes_list):
+            if cg == g and cc == c:
+                try:
+                    self.class_listbox.selection_clear(0, tk.END)
+                    self.class_listbox.selection_set(i)
+                    self.class_listbox.see(i)
+                except Exception:
+                    pass
+                return
+
     # ── 写真ロード ──
     def open_photo(self):
         try:
@@ -1167,7 +1564,11 @@ class CropAdjusterApp:
         folder = find_class_folder(self.base, g, c)
         if not folder:
             messagebox.showerror("エラー", f"{g}年{c}組のフォルダが見つかりません"); return
-        self.photos = collect_photos(folder, g, c)
+        new_photos = collect_photos(folder, g, c)
+        # 別クラスに切り替わったらプロキシキャッシュを破棄（メモリ肥大防止）
+        if set(new_photos.values()) != set(self.photos.values()):
+            self._proxy_cache.clear()
+        self.photos = new_photos
         self.photo_nums = sorted(self.photos.keys())
         if not self.photo_nums:
             messagebox.showwarning("写真なし", f"{g}年{c}組に写真がありません"); return
@@ -1179,8 +1580,24 @@ class CropAdjusterApp:
             self.status_var.set(f"⚠ {g}年{c}組 {n}番の写真が見つかりません"); return
         self.current_key = (g, c, n)
         self.v_grade.set(str(g)); self.v_cls.set(str(c)); self.v_num.set(str(n))
-        self.current_img = fix_exif(Image.open(self.photos[n]))
-        self.auto_initial = auto_initial_crop_params(self.current_img)
+        # 編集用プロキシをキャッシュから取得（なければ生成）
+        path = self.photos[n]
+        cached = self._proxy_cache.get(path)
+        if cached is not None:
+            self.current_img, self.auto_initial, self.current_orig_size = cached
+        else:
+            full = fix_exif(Image.open(path))
+            self.current_orig_size = full.size
+            proxy = make_proxy(full)
+            self.current_img = proxy
+            self.auto_initial = auto_initial_crop_params(proxy)
+            self._proxy_cache[path] = (self.current_img, self.auto_initial,
+                                       self.current_orig_size)
+        # プレビュー基準画像を1回だけ生成（スライダー操作を高速化）
+        self._preview_base = prepare_preview_base(
+            self.current_img, self.PREVIEW_W, self.PREVIEW_H)
+        # 実写真px換算係数（プロキシ→実写真）
+        self._px_scale = self.current_orig_size[0] / self.current_img.size[0]
         ov = self.overrides.get((g,c,n))
         if ov:
             self.v_top.set(float(ov.get('top_pct', 0)))
@@ -1219,9 +1636,10 @@ class CropAdjusterApp:
         top  = self.v_top.get()
         left = self.v_left.get()
         zoom = float(self.v_zoom.get())
-        prev_img, _, _, self._corners = render_clipping_preview(
-            self.current_img, top, left, zoom,
-            max_w=self.PREVIEW_W, max_h=self.PREVIEW_H)
+        # キャッシュ済み基準画像にオーバーレイだけ再描画（高速）
+        prev_img, _, _, self._corners = render_clipping_overlay(
+            self._preview_base, top, left, zoom,
+            px_scale=getattr(self, "_px_scale", 1.0))
         self._prev_tk = ImageTk.PhotoImage(prev_img)
         self.prev_label.configure(image=self._prev_tk,
                                   width=prev_img.width, height=prev_img.height)
@@ -1255,6 +1673,306 @@ class CropAdjusterApp:
         if self.v_auto_pdf.get():
             self.regen_current_class()
         self.next_photo()
+
+    # ── 顔写真の画像出力 ──
+    def _get_full_cropped(self, g, c, n):
+        """指定生徒の実写真をフル解像度で開いてクロップして返す。
+        編集中の生徒は現在のスライダー値、それ以外は保存済み/自動値を使う。"""
+        path = self.photos.get(n)
+        if not path or not os.path.exists(path):
+            return None
+        full = fix_exif(Image.open(path))
+        if self.current_key == (g, c, n):
+            top  = float(self.v_top.get())
+            left = float(self.v_left.get())
+            zoom = float(self.v_zoom.get())
+        else:
+            ov = self.overrides.get((g, c, n))
+            if ov:
+                top, left, zoom = (float(ov.get('top_pct', 0)),
+                                   float(ov.get('left_pct', 0)),
+                                   float(ov.get('zoom', 1.0)))
+            else:
+                top, left, zoom = auto_initial_crop_params(make_proxy(full))
+        return do_crop(full, top, left, zoom)
+
+    def _student_info(self, g, c, n):
+        info = self.roster_full.get((g, c), {}).get(n, {})
+        return info.get("kanji", ""), info.get("kana", "")
+
+    def export_current_student(self):
+        if not self.current_key:
+            messagebox.showinfo("写真未選択", "先にクラス一覧から生徒を選んでください")
+            return
+        g, c, n = self.current_key
+        try:
+            cropped = self._get_full_cropped(g, c, n)
+        except Exception as e:
+            messagebox.showerror("エラー", f"写真の読み込みに失敗しました\n{e}")
+            return
+        if cropped is None:
+            messagebox.showerror("エラー", "写真が見つかりません")
+            return
+        kanji, kana = self._student_info(g, c, n)
+        card = render_id_card(cropped, g, c, n, kanji, kana)
+        out_dir = os.path.join(self.base, "output", "顔写真")
+        os.makedirs(out_dir, exist_ok=True)
+        safe = (kanji or f"{n}番").replace(" ", "").replace("/", "_").replace(os.sep, "_")
+        out_path = os.path.join(out_dir, f"{g}年{c}組_{n:02d}_{safe}.png")
+        card.save(out_path)
+        self.status_var.set(f"  📸 保存しました: {os.path.basename(out_path)}")
+        self._reveal_in_finder(out_path)
+
+    def _reveal_in_finder(self, path):
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            pass
+
+    # ── クラス写真の参照（検索・一括出力で使用、キャッシュ付き）──
+    def _class_photos(self, g, c):
+        """(g,c)の写真辞書 {番号: path} を返す。フォルダ探索結果をキャッシュ。"""
+        if not hasattr(self, "_class_photos_cache"):
+            self._class_photos_cache = {}
+        key = (g, c)
+        if key not in self._class_photos_cache:
+            folder = find_class_folder(self.base, g, c)
+            self._class_photos_cache[key] = collect_photos(folder, g, c) if folder else {}
+        return self._class_photos_cache[key]
+
+    def _find_photo_path(self, g, c, n):
+        return self._class_photos(g, c).get(n)
+
+    def _make_face_thumb(self, g, c, n, size=120):
+        """指定生徒の顔サムネイル(PIL)を生成。検索結果表示用。"""
+        path = self._find_photo_path(g, c, n)
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            proxy = make_proxy(fix_exif(Image.open(path)), max_dim=600)
+            ov = self.overrides.get((g, c, n))
+            if ov:
+                t, l, z = (float(ov.get('top_pct', 0)), float(ov.get('left_pct', 0)),
+                           float(ov.get('zoom', 1.0)))
+            else:
+                t, l, z = auto_initial_crop_params(proxy)
+            cropped = do_crop(proxy, t, l, z)
+            h = int(size / CELL_ASPECT)
+            return cropped.resize((size, h), Image.LANCZOS)
+        except Exception:
+            return None
+
+    # ── 名前・ふりがな検索 ──
+    def show_search(self):
+        if not self.roster_full:
+            messagebox.showinfo("名簿なし",
+                "名簿(xlsx)が読み込めないため検索できません。\n"
+                "写真フォルダに生徒情報のExcelを置いてください。")
+            return
+        SearchWindow(self)
+
+    # ── 撮影アプリのZIPを取り込み ──
+    def import_capture_zip(self):
+        """撮影アプリ(ClassPhotoCapture)が書き出した ZIP を取り込む。
+        manifest.json があれば撮影アプリのデータとして扱い、写真フォルダ・
+        crop_overrides.csv に統合する。担任写真は class/担任/ サブフォルダに保存。"""
+        from tkinter import filedialog
+        import zipfile, json, tempfile, shutil
+
+        path = filedialog.askopenfilename(
+            title="撮影アプリのデータを選択（.cpcap / .zip）",
+            filetypes=[("撮影データ", "*.cpcap *.zip"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                # 展開
+                with zipfile.ZipFile(path, 'r') as z:
+                    z.extractall(td)
+
+                # manifest.json を探す（直下 or 1階層下）
+                manifest_path = None
+                source_root = td
+                for entry in os.listdir(td):
+                    full = os.path.join(td, entry)
+                    cand = os.path.join(full, 'manifest.json')
+                    if os.path.isdir(full) and os.path.exists(cand):
+                        manifest_path = cand; source_root = full; break
+                if manifest_path is None:
+                    cand = os.path.join(td, 'manifest.json')
+                    if os.path.exists(cand):
+                        manifest_path = cand; source_root = td
+
+                manifest = None
+                if manifest_path:
+                    try:
+                        with open(manifest_path, encoding='utf-8') as f:
+                            manifest = json.load(f)
+                    except Exception:
+                        manifest = None
+
+                if manifest is None:
+                    if not messagebox.askyesno(
+                        "manifest なし",
+                        "撮影アプリの manifest.json が見つかりませんが、\n"
+                        "写真と crop_overrides.csv を取り込みますか？"):
+                        return
+
+                # 取り込み実行
+                student_copied = 0
+                teacher_copied = 0
+                csv_path = None
+                for root, dirs, files in os.walk(source_root):
+                    rel = os.path.relpath(root, source_root)
+                    if rel == '.':
+                        continue
+                    parts = rel.replace('\\', '/').split('/')
+                    # crop_check/ は別途処理
+                    if parts[0] == 'crop_check':
+                        for fn in files:
+                            if fn == 'crop_overrides.csv':
+                                csv_path = os.path.join(root, fn)
+                        continue
+                    # 写真フォルダ・担任フォルダをコピー
+                    target_dir = os.path.join(self.base, rel)
+                    os.makedirs(target_dir, exist_ok=True)
+                    for fn in files:
+                        src = os.path.join(root, fn)
+                        dst = os.path.join(target_dir, fn)
+                        try:
+                            shutil.copy2(src, dst)
+                            if '担任' in parts:
+                                teacher_copied += 1
+                            elif fn.lower().endswith(('.jpg','.jpeg','.png','.heic')):
+                                student_copied += 1
+                        except Exception:
+                            pass
+
+                # crop_overrides.csv をマージ（既存の override に上書き）
+                merged = 0
+                if csv_path and os.path.exists(csv_path):
+                    merged = self._merge_overrides_csv(csv_path)
+
+                # クラス一覧と表示を更新
+                self.classes_list = find_all_classes(self.base)
+                self._refresh_class_list()
+                self.saved_var.set(f"調整済み {len(self.overrides)}件")
+
+                # メタ情報サマリ
+                meta = ""
+                if manifest:
+                    meta = (f"クラス: {manifest.get('grade','?')}年"
+                            f"{manifest.get('cls','?')}組\n"
+                            f"児童: {manifest.get('studentCount','?')}人 "
+                            f"／ 担任: {manifest.get('teacherCount','?')}人\n"
+                            f"画像形式: {manifest.get('imageFormat','?')}\n"
+                            f"書き出し日時: {manifest.get('exportedAt','?')}\n\n")
+                msg = (f"{meta}写真を取り込みました。\n"
+                       f"  児童写真: {student_copied} 枚\n"
+                       f"  担任写真: {teacher_copied} 枚\n"
+                       f"  クロップ情報(overrides): {merged} 件")
+                if teacher_copied:
+                    msg += "\n\n※ 担任写真は『○年○組/担任/』に保存しました。"
+                messagebox.showinfo("取り込み完了", msg)
+        except Exception as e:
+            messagebox.showerror("エラー", f"取り込みに失敗しました:\n{e}")
+
+    def _merge_overrides_csv(self, src_csv_path):
+        """ソースの crop_overrides.csv を既存の overrides にマージし、保存する。"""
+        added = 0
+        try:
+            with open(src_csv_path, encoding='utf-8-sig') as f:
+                for row in csv.DictReader(f):
+                    try:
+                        k = (int(row['grade']), int(row['cls']), int(row['num']))
+                        self.overrides[k] = {
+                            'top_pct': float(row.get('top_pct', 0) or 0),
+                            'left_pct': float(row.get('left_pct', 0) or 0),
+                            'zoom':     float(row.get('zoom', 1) or 1),
+                        }
+                        added += 1
+                    except Exception:
+                        pass
+            save_overrides(self.override_path, self.overrides)
+        except Exception:
+            pass
+        return added
+
+    # ── クラス全員を個別PNG出力 ──
+    def export_class_all(self):
+        if not self.current_key:
+            messagebox.showinfo("情報", "先にクラスを選択してください")
+            return
+        g, c, _ = self.current_key
+        photos = self._class_photos(g, c)
+        nums = sorted(photos.keys())
+        if not nums:
+            messagebox.showwarning("写真なし", f"{g}年{c}組に写真がありません")
+            return
+        out_dir = os.path.join(self.base, "output", "顔写真", f"{g}年{c}組")
+        os.makedirs(out_dir, exist_ok=True)
+
+        def worker():
+            done = 0
+            for n in nums:
+                try:
+                    cropped = self._get_full_cropped(g, c, n)
+                    if cropped is None:
+                        continue
+                    kanji, kana = self._student_info(g, c, n)
+                    card = render_id_card(cropped, g, c, n, kanji, kana)
+                    safe = (kanji or f"{n}番").replace(" ", "").replace("/", "_").replace(os.sep, "_")
+                    card.save(os.path.join(out_dir, f"{g}年{c}組_{n:02d}_{safe}.png"))
+                    done += 1
+                except Exception:
+                    pass
+                self.root.after(0, self.status_var.set,
+                                f"  📸 出力中... {done}/{len(nums)}")
+            self.root.after(0, self._export_done, out_dir,
+                            f"{g}年{c}組 全{done}名を出力しました")
+        threading.Thread(target=worker, daemon=True).start()
+        self.status_var.set(f"  📸 {g}年{c}組 の出力を開始...")
+
+    # ── クラス一覧シートを1枚出力 ──
+    def export_roster_sheet(self):
+        if not self.current_key:
+            messagebox.showinfo("情報", "先にクラスを選択してください")
+            return
+        g, c, _ = self.current_key
+        photos = self._class_photos(g, c)
+        nums = sorted(photos.keys())
+        if not nums:
+            messagebox.showwarning("写真なし", f"{g}年{c}組に写真がありません")
+            return
+
+        def worker():
+            items = []
+            for n in nums:
+                kanji, kana = self._student_info(g, c, n)
+                thumb = self._make_face_thumb(g, c, n, size=180)
+                items.append((n, kanji, kana, thumb))
+                self.root.after(0, self.status_var.set,
+                                f"  🖼 一覧シート生成中... {len(items)}/{len(nums)}")
+            sheet = render_roster_sheet(g, c, items)
+            out_dir = os.path.join(self.base, "output", "顔写真")
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f"{g}年{c}組_一覧シート.png")
+            sheet.save(out_path)
+            self.root.after(0, self._export_done, out_path,
+                            f"{g}年{c}組 一覧シートを出力しました")
+        threading.Thread(target=worker, daemon=True).start()
+        self.status_var.set(f"  🖼 {g}年{c}組 一覧シート生成中...")
+
+    def _export_done(self, reveal_path, msg):
+        self.status_var.set(f"  ✅ {msg}")
+        self._reveal_in_finder(reveal_path)
 
     def reset_current(self):
         if not self.current_key: return
@@ -1497,6 +2215,235 @@ class CropAdjusterApp:
         threading.Thread(target=worker, daemon=True).start()
 
 
+
+
+# ════════════════════════════════════════════════════════
+#  名前・ふりがな検索画面
+# ════════════════════════════════════════════════════════
+class SearchWindow:
+    """漢字名・ふりがなの部分一致で全校児童を検索し、顔写真付きで一覧表示。
+    結果から「開く」（編集画面に飛ぶ）や「画像出力」ができる。"""
+
+    def __init__(self, app):
+        self.app = app
+        self.root = app.root
+        # 全児童のフラット索引を構築: [(g, c, n, kanji, kana), ...]
+        self.index = []
+        for (g, c), students in sorted(app.roster_full.items()):
+            for n, info in sorted(students.items()):
+                self.index.append((g, c, n,
+                                   info.get("kanji", ""), info.get("kana", "")))
+        self._thumb_refs = {}     # サムネ参照保持（GC防止）
+        self._thumb_thread = None
+        self._search_seq = 0      # 検索世代（古いスレッド結果を無視）
+
+        self.win = tk.Toplevel(self.root)
+        self.win.title("名前で検索")
+        self.win.configure(bg=PALETTE["bg"])
+        sw = self.win.winfo_screenwidth(); sh = self.win.winfo_screenheight()
+        ww = min(720, int(sw*0.6)); wh = min(760, int(sh*0.82))
+        self.win.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
+        app._modal_open()
+        self.win.protocol("WM_DELETE_WINDOW", self._close)
+
+        # ヘッダー＋検索入力
+        head = tk.Frame(self.win, bg=PALETTE["primary"], height=56)
+        head.pack(fill="x"); head.pack_propagate(False)
+        tk.Label(head, text="🔍 名前で検索", bg=PALETTE["primary"], fg="#ffffff",
+                 font=app._font(15, True)).pack(side="left", padx=20)
+
+        bar = tk.Frame(self.win, bg=PALETTE["panel"])
+        bar.pack(fill="x", padx=0, pady=0)
+        tk.Label(bar, text="漢字名・ふりがな・番号で部分一致検索",
+                 bg=PALETTE["panel"], fg=PALETTE["text_dim"],
+                 font=app._font(10)).pack(anchor="w", padx=18, pady=(10,2))
+        self.q_var = tk.StringVar()
+        ent = tk.Entry(bar, textvariable=self.q_var, font=app._font(15),
+                       bg=PALETTE["input_bg"], fg=PALETTE["text"],
+                       highlightthickness=2, highlightbackground=PALETTE["border"],
+                       highlightcolor=PALETTE["primary"], relief="flat")
+        ent.pack(fill="x", padx=18, pady=(0,12), ipady=6)
+        # 日本語IME入力でも確実に拾えるよう StringVar の変更を監視（デバウンス付き）
+        self._debounce_id = None
+        self.q_var.trace_add("write", lambda *a: self._schedule_search())
+        ent.bind("<Return>", lambda e: self._on_query_change())
+        self.win.after(200, ent.focus_set)
+
+        self.count_var = tk.StringVar(value=f"全 {len(self.index)} 名")
+        tk.Label(bar, textvariable=self.count_var, bg=PALETTE["panel"],
+                 fg=PALETTE["accent_dk"], font=app._font(10, True)
+                 ).pack(anchor="w", padx=18, pady=(0,10))
+
+        # 結果スクロール領域
+        body = tk.Frame(self.win, bg=PALETTE["bg"])
+        body.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(body, bg=PALETTE["bg"], highlightthickness=0)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=sb.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.results_frame = tk.Frame(self.canvas, bg=PALETTE["bg"])
+        self._win_id = self.canvas.create_window((0,0), anchor="nw",
+                                                 window=self.results_frame)
+        self.results_frame.bind("<Configure>", lambda e: self.canvas.configure(
+            scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
+            self._win_id, width=e.width))
+        # ホイールはアプリのグローバルハンドラに登録（bind_allを使わずメインと共存）
+        self.app._register_wheel(self.win, self.canvas)
+
+        # macOSのTkではToplevelが最初のイベントまで描画されないことがあるため、
+        # 明示的に前面化＆強制描画してから結果を表示する
+        self.win.deiconify()
+        self.win.lift()
+        self.win.update()
+        self._render_results(self.index)
+        self.win.update_idletasks()
+
+    def _schedule_search(self):
+        """入力のたびに即検索すると重いので250msのデバウンスをかける。"""
+        if self._debounce_id is not None:
+            try:
+                self.win.after_cancel(self._debounce_id)
+            except Exception:
+                pass
+        self._debounce_id = self.win.after(250, self._on_query_change)
+
+    def _on_query_change(self):
+        self._debounce_id = None
+        q = self.q_var.get().strip()
+        if not q:
+            matches = self.index
+            self.count_var.set(f"全 {len(matches)} 名")
+        else:
+            ql = q.lower()
+            matches = []
+            for rec in self.index:
+                g, c, n, kanji, kana = rec
+                hay = f"{kanji} {kana} {g}年{c}組{n}番 {n}".lower()
+                # スペース除去でも一致するように
+                if ql in hay or ql.replace(" ", "") in hay.replace(" ", ""):
+                    matches.append(rec)
+            self.count_var.set(f"該当 {len(matches)} 名")
+        self._render_results(matches)
+
+    def _render_results(self, matches):
+        self._search_seq += 1
+        for w in self.results_frame.winfo_children():
+            w.destroy()
+        self._thumb_refs.clear()
+        if not matches:
+            tk.Label(self.results_frame, text="該当する児童がいません",
+                     bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                     font=self.app._font(12)).pack(pady=40)
+            return
+        # 多すぎる場合はサムネ生成を上限で抑える
+        THUMB_LIMIT = 60
+        rows = []
+        for i, rec in enumerate(matches):
+            rows.append(self._make_row(rec, with_thumb=(i < THUMB_LIMIT)))
+        if len(matches) > THUMB_LIMIT:
+            tk.Label(self.results_frame,
+                     text=f"※ 写真表示は先頭{THUMB_LIMIT}名まで（絞り込んでください）",
+                     bg=PALETTE["bg"], fg=PALETTE["text_dim"],
+                     font=self.app._font(9)).pack(pady=8)
+        # サムネをバックグラウンドで生成
+        self._start_thumb_loading(matches[:THUMB_LIMIT], rows, self._search_seq)
+
+    def _make_row(self, rec, with_thumb=True):
+        g, c, n, kanji, kana = rec
+        row = tk.Frame(self.results_frame, bg=PALETTE["panel"],
+                       highlightthickness=1, highlightbackground=PALETTE["border"])
+        row.pack(fill="x", padx=12, pady=5)
+        # サムネ枠
+        thumb_h = int(96 / CELL_ASPECT)
+        thumb_lbl = tk.Label(row, bg=PALETTE["panel_alt"],
+                             width=96, height=thumb_h)
+        thumb_lbl.pack(side="left", padx=10, pady=8)
+        # 情報
+        info = tk.Frame(row, bg=PALETTE["panel"])
+        info.pack(side="left", fill="both", expand=True, padx=6, pady=8)
+        tk.Label(info, text=f"{g}年 {c}組  {n}番", bg=PALETTE["panel"],
+                 fg=PALETTE["accent_dk"], font=self.app._font(11, True),
+                 anchor="w").pack(fill="x")
+        tk.Label(info, text=kanji or "（名前未登録）", bg=PALETTE["panel"],
+                 fg=PALETTE["text"], font=self.app._font(15, True),
+                 anchor="w").pack(fill="x")
+        tk.Label(info, text=kana, bg=PALETTE["panel"],
+                 fg=PALETTE["text_dim"], font=self.app._font(10),
+                 anchor="w").pack(fill="x")
+        # ボタン
+        btns = tk.Frame(row, bg=PALETTE["panel"])
+        btns.pack(side="right", padx=10)
+        MacButton(btns, "開く", lambda r=rec: self._open_student(r),
+                  bg=PALETTE["primary"], fg="#ffffff",
+                  font=self.app._font(10, True), padx=12, pady=6
+                  ).pack(side="top", pady=3)
+        MacButton(btns, "画像出力", lambda r=rec: self._export_student(r),
+                  bg=PALETTE["accent"], fg="#ffffff",
+                  font=self.app._font(10, True), padx=12, pady=6
+                  ).pack(side="top", pady=3)
+        return thumb_lbl
+
+    def _start_thumb_loading(self, matches, thumb_labels, seq):
+        def worker():
+            for rec, lbl in zip(matches, thumb_labels):
+                if seq != self._search_seq:
+                    return  # 新しい検索が始まった → 中断
+                g, c, n, _, _ = rec
+                thumb = self.app._make_face_thumb(g, c, n, size=96)
+                if thumb is None:
+                    continue
+                self.win.after(0, self._set_thumb, lbl, thumb, seq)
+        self._thumb_thread = threading.Thread(target=worker, daemon=True)
+        self._thumb_thread.start()
+
+    def _set_thumb(self, lbl, pil_img, seq):
+        if seq != self._search_seq:
+            return
+        try:
+            tkimg = ImageTk.PhotoImage(pil_img)
+            self._thumb_refs[id(lbl)] = tkimg
+            lbl.configure(image=tkimg, width=pil_img.width, height=pil_img.height)
+        except Exception:
+            pass
+
+    def _open_student(self, rec):
+        g, c, n, _, _ = rec
+        self._close()
+        self.app.v_grade.set(str(g)); self.app.v_cls.set(str(c)); self.app.v_num.set(str(n))
+        self.app.open_photo()
+        # クラス一覧の選択も同期
+        self.app._select_class_in_list(g, c)
+
+    def _export_student(self, rec):
+        g, c, n, kanji, kana = rec
+        try:
+            cropped = self.app._get_full_cropped(g, c, n)
+        except Exception as e:
+            messagebox.showerror("エラー", f"写真の読み込みに失敗しました\n{e}")
+            return
+        if cropped is None:
+            messagebox.showerror("エラー", "写真が見つかりません")
+            return
+        card = render_id_card(cropped, g, c, n, kanji, kana)
+        out_dir = os.path.join(self.app.base, "output", "顔写真")
+        os.makedirs(out_dir, exist_ok=True)
+        safe = (kanji or f"{n}番").replace(" ", "").replace("/", "_").replace(os.sep, "_")
+        out_path = os.path.join(out_dir, f"{g}年{c}組_{n:02d}_{safe}.png")
+        card.save(out_path)
+        self.app._reveal_in_finder(out_path)
+        messagebox.showinfo("出力完了", f"保存しました:\n{os.path.basename(out_path)}")
+
+    def _close(self):
+        if self._debounce_id is not None:
+            try:
+                self.win.after_cancel(self._debounce_id)
+            except Exception:
+                pass
+        self.app._unregister_wheel(self.win)
+        self.app._modal_close()
+        self.win.destroy()
 
 
 # ════════════════════════════════════════════════════════
@@ -1759,7 +2706,7 @@ class ClassBatchEditor:
 
         for i, n in enumerate(self.nums):
             try:
-                img = fix_exif(Image.open(self.photos[n]))
+                img = make_proxy(fix_exif(Image.open(self.photos[n])))
                 self.image_cache[n] = img
                 self.face_cache[n] = auto_initial_crop_params(img)
             except Exception as e:
@@ -1833,7 +2780,7 @@ class ClassBatchEditor:
         # 6列のグリッド表示
         self._cols = 6
         thumb_w = 140
-        thumb_h = int(thumb_w / 1.02)
+        thumb_h = int(thumb_w / CELL_ASPECT)
         for idx, n in enumerate(self.nums):
             if n not in self.image_cache: continue
             row, col = divmod(idx, self._cols)
@@ -2163,12 +3110,8 @@ class ProgressDialog:
         self.app = app
         if self.app and hasattr(self.app, "_modal_open"):
             self.app._modal_open()
-            self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _on_close(self):
-        if self.app and hasattr(self.app, "_modal_close"):
-            self.app._modal_close()
-        self.win.destroy()
         sw = self.win.winfo_screenwidth()
         sh = self.win.winfo_screenheight()
         ww, wh = 640, 420
@@ -2225,6 +3168,14 @@ class ProgressDialog:
         # フォルダを開くボタン（成功時のみ表示）
         self._open_btn_frame = btn_frame
         self.open_folder_btn = None
+        # 前面に出して確実に描画
+        self.win.lift()
+        self.win.update_idletasks()
+
+    def _on_close(self):
+        if self.app and hasattr(self.app, "_modal_close"):
+            self.app._modal_close()
+        self.win.destroy()
 
     def update(self, percent=None, status=None, log=None):
         if percent is not None:
@@ -2240,16 +3191,12 @@ class ProgressDialog:
         self.pb_var.set(100)
         if error:
             self.status_var.set("✗ " + message)
-            self.close_btn.bg = PALETTE["danger"]
-            self.close_btn.label.configure(bg=PALETTE["danger"], fg="#ffffff",
-                                          text="閉じる")
-            self.close_btn.configure(bg=PALETTE["danger"])
+            self.close_btn.set_text("閉じる")
+            self.close_btn.set_style(bg=PALETTE["danger"], fg="#ffffff")
         else:
             self.status_var.set("✓ " + message)
-            self.close_btn.bg = PALETTE["success"]
-            self.close_btn.label.configure(bg=PALETTE["success"], fg="#ffffff",
-                                          text="閉じる")
-            self.close_btn.configure(bg=PALETTE["success"])
+            self.close_btn.set_text("閉じる")
+            self.close_btn.set_style(bg=PALETTE["success"], fg="#ffffff")
             # 「フォルダを開く」ボタンを成功時のみ追加
             if self.output_dir and os.path.exists(self.output_dir):
                 self.open_folder_btn = MacButton(self._open_btn_frame,
@@ -2257,6 +3204,11 @@ class ProgressDialog:
                     bg=PALETTE["primary"], fg="#ffffff",
                     font=(system_font_family(), 12, "bold"), padx=20, pady=8)
                 self.open_folder_btn.pack(side="right", padx=8)
+            # 成功時は数秒後に自動で閉じる（「消えない」問題への対応）
+            try:
+                self.win.after(2500, self._on_close)
+            except Exception:
+                pass
         self.win.update_idletasks()
 
     def _open_folder(self):
@@ -2354,12 +3306,12 @@ class PosterWizard:
         elif s == "teacher":self._step_teacher()
         elif s == "confirm":self._step_confirm()
         # ボタン状態
-        self.btn_back.label.configure(text="← 戻る" if self.step > 0 else "")
+        self.btn_back.set_text("← 戻る" if self.step > 0 else "")
         if self.step == 0:
             self.btn_back.pack_forget()
         else:
             self.btn_back.pack(side="left", padx=14, pady=12)
-        self.btn_next.label.configure(text="生成 ✓" if self.step == len(self.steps)-1 else "次へ →")
+        self.btn_next.set_text("生成 ✓" if self.step == len(self.steps)-1 else "次へ →")
 
     def _step_mode(self):
         c = self.content
