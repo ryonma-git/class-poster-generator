@@ -331,8 +331,9 @@ private extension Array {
     }
 }
 
-private extension String {
+extension String {
     /// 全角数字や前後空白を取り除き ASCII 数字のみを残す
+    /// （Phase 5 で導入、Phase 7 で再利用するため internal に昇格）
     func trimmedAsciiDigits() -> String {
         var s = self.trimmingCharacters(in: .whitespacesAndNewlines)
         // 全角→半角

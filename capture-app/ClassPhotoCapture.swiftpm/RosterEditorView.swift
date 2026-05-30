@@ -23,6 +23,7 @@ struct RosterEditorView: View {
     }
     @FocusState private var focused: Field?
     @State private var showImporter = false
+    @State private var showOCR = false
 
     var body: some View {
         NavigationStack {
@@ -47,6 +48,11 @@ struct RosterEditorView: View {
                             showImporter = true
                         } label: {
                             Label("CSV / TSV から取り込み", systemImage: "tablecells.badge.ellipsis")
+                        }
+                        Button {
+                            showOCR = true
+                        } label: {
+                            Label("写真から取り込み（OCR）", systemImage: "doc.text.viewfinder")
                         }
                         Divider()
                         Button(role: .destructive) {
@@ -77,6 +83,9 @@ struct RosterEditorView: View {
             }
             .sheet(isPresented: $showImporter) {
                 RosterImportView().environmentObject(state)
+            }
+            .sheet(isPresented: $showOCR) {
+                RosterOCRView().environmentObject(state)
             }
         }
     }
