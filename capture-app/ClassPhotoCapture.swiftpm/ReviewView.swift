@@ -18,6 +18,8 @@ struct ReviewView: View {
     @State private var isSavingPhotos = false
     @State private var photoProgress: (Int, Int) = (0, 0)
     @State private var photoResult: String? = nil
+    // 名簿エディタ（Phase 2）
+    @State private var showRoster = false
 
     private let cols = [GridItem(.adaptive(minimum: 96), spacing: 10)]
 
@@ -62,6 +64,9 @@ struct ReviewView: View {
             }
             .sheet(isPresented: $showShare) {
                 if let url = shareURL { ShareSheet(items: [url]) }
+            }
+            .sheet(isPresented: $showRoster) {
+                RosterEditorView().environmentObject(state)
             }
             .alert("書き出しエラー", isPresented: .constant(exportError != nil)) {
                 Button("OK") { exportError = nil }
@@ -142,7 +147,7 @@ struct ReviewView: View {
 
     private var summary: some View {
         VStack(spacing: 4) {
-            Text("\(state.grade)年 \(state.cls)組")
+            Text(state.group.displayName)
                 .font(.title2.bold())
             Text("撮影済 \(state.capturedCount) ／ 欠席 \(state.absentCount) ／ 未撮影 \(state.shots.count - state.doneCount)")
                 .font(.subheadline)
@@ -150,8 +155,47 @@ struct ReviewView: View {
             Text("形式: \(state.imageFormat.rawValue)　タップでプレビュー（そこから撮り直しできます）")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            // ── 名簿の入力状況 ──
+            rosterStatusBar
+                .padding(.top, 6)
         }
         .padding(.top, 8)
+        .padding(.horizontal)
+    }
+
+    /// 名簿入力済み件数と編集ボタン
+    private var rosterStatusBar: some View {
+        let total = state.roster.students.count + state.roster.teachers.count
+        let entered = state.roster.students.filter { !$0.furigana.isEmpty || !$0.name.isEmpty }.count
+            + state.roster.teachers.filter { !$0.furigana.isEmpty || !$0.name.isEmpty }.count
+
+        return HStack(spacing: 12) {
+            Image(systemName: entered == 0
+                  ? "person.text.rectangle"
+                  : (entered == total ? "checkmark.seal.fill" : "person.text.rectangle.fill"))
+                .foregroundStyle(entered == total && total > 0 ? .green : .accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entered == 0
+                     ? "名簿は未入力"
+                     : "名簿: \(entered) / \(total) 名 入力済み")
+                    .font(.subheadline.weight(.semibold))
+                Text(entered == 0
+                     ? "ポスター生成を使うには名前を入力してください"
+                     : "タップで編集")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("編集") { showRoster = true }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding(10)
+        .background(Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 10))
+        .contentShape(Rectangle())
+        .onTapGesture { showRoster = true }
     }
 
     @ViewBuilder
