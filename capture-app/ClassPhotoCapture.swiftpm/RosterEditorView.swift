@@ -22,6 +22,7 @@ struct RosterEditorView: View {
         case teacherKanji(Int)
     }
     @FocusState private var focused: Field?
+    @State private var showImporter = false
 
     var body: some View {
         NavigationStack {
@@ -43,6 +44,12 @@ struct RosterEditorView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Button {
+                            showImporter = true
+                        } label: {
+                            Label("CSV / TSV から取り込み", systemImage: "tablecells.badge.ellipsis")
+                        }
+                        Divider()
+                        Button(role: .destructive) {
                             clearAllNames()
                         } label: {
                             Label("すべて消去", systemImage: "eraser")
@@ -67,6 +74,9 @@ struct RosterEditorView: View {
                 // 撮影リストと名簿の人数を必ず揃える（後から人数変更しても破綻しないよう）
                 state.roster.ensureStudentCount(state.studentCount)
                 state.roster.ensureTeacherCount(state.teacherCount)
+            }
+            .sheet(isPresented: $showImporter) {
+                RosterImportView().environmentObject(state)
             }
         }
     }
