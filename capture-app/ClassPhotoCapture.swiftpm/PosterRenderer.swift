@@ -313,6 +313,24 @@ enum PosterRenderer {
                                         roster: Roster,
                                         design: PosterDesign,
                                         useTeacherPhoto: Bool) {
+        // 写真ありモード + 撮影済み + 画像あり → 写真付き担任セルに分岐
+        if useTeacherPhoto, shot.status == .captured, shot.image != nil {
+            drawTeacherCellWithPhoto(cg: cg, rect: rect, labelH: labelH,
+                                     shot: shot, member: member,
+                                     roster: roster, design: design)
+        } else {
+            drawTeacherCellTextOnly(cg: cg, rect: rect,
+                                    member: member, roster: roster,
+                                    design: design)
+        }
+    }
+
+    /// 旧来の文字のみ担任セル
+    private static func drawTeacherCellTextOnly(cg: CGContext,
+                                                rect: CGRect,
+                                                member: Member?,
+                                                roster: Roster,
+                                                design: PosterDesign) {
         let r: CGFloat = PosterLayout.mm(2.5)
         let bgPath = UIBezierPath(roundedRect: rect, cornerRadius: r)
         cg.saveGState()
@@ -320,10 +338,7 @@ enum PosterRenderer {
         cg.addPath(bgPath.cgPath); cg.fillPath()
         cg.restoreGState()
 
-        // Phase 6 で写真ありに分岐するためのフック（現在は常に文字のみ）
-        let _ = useTeacherPhoto
-
-        // 「担　任」（小さく上）
+        // 「担　任」
         let topRect = CGRect(x: rect.minX, y: rect.minY + rect.height * 0.18,
                              width: rect.width, height: rect.height * 0.20)
         drawText(cg: cg, text: "担　任", rect: topRect,
@@ -333,13 +348,14 @@ enum PosterRenderer {
 
         // 担任名
         let name = member.map { roster.displayName(for: $0) } ?? ""
+        let displayed = name.isEmpty ? "（担任名未設定）" : name
         let nameRect = CGRect(x: rect.minX, y: rect.minY + rect.height * 0.42,
                               width: rect.width, height: rect.height * 0.28)
-        let nameFont = fitFont(text: name.isEmpty ? "（担任名未設定）" : name,
+        let nameFont = fitFont(text: displayed,
                                maxWidth: rect.width * 0.84,
                                maxSize: rect.height * 0.13,
                                minSize: rect.height * 0.07)
-        drawText(cg: cg, text: name.isEmpty ? "（担任名未設定）" : name,
+        drawText(cg: cg, text: displayed,
                  rect: nameRect, fontSize: nameFont.pointSize,
                  color: .white,
                  alignment: .center, verticalAlign: .middle, bold: !name.isEmpty)
@@ -351,6 +367,92 @@ enum PosterRenderer {
                          height: PosterLayout.mm(0.8))
         cg.setFillColor(design.accentUI.withAlphaComponent(0.78).cgColor)
         cg.fill(bar)
+    }
+
+    /// 写真付き担任セル
+    /// 児童セルと同形（写真上 / ラベル下）だが、ラベルが teacherBg 色で「担　任」マーク付き。
+    private static func drawTeacherCellWithPhoto(cg: CGContext,
+                                                 rect: CGRect,
+                                                 labelH: CGFloat,
+                                                 shot: StudentShot,
+                                                 member: Member?,
+                                                 roster: Roster,
+                                                 design: PosterDesign) {
+        let r: CGFloat = PosterLayout.mm(2.5)
+        let photoH = rect.height - labelH
+        let photoRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: photoH)
+        let labelRect = CGRect(x: rect.minX, y: rect.minY + photoH,
+                               width: rect.width, height: labelH)
+
+        // ── カード背景（担任色） ──
+        let bgPath = UIBezierPath(roundedRect: rect, cornerRadius: r)
+        cg.saveGState()
+        cg.setFillColor(design.teacherBgUI.cgColor)
+        cg.addPath(bgPath.cgPath); cg.fillPath()
+        cg.restoreGState()
+
+        // ── 写真エリア（上、角丸はtopのみ） ──
+        cg.saveGState()
+        let photoClip = UIBezierPath(
+            roundedRect: photoRect,
+            byRoundingCorners: [.topLeft, .topRight],
+            cornerRadii: CGSize(width: r, height: r))
+        cg.addPath(photoClip.cgPath)
+        cg.clip()
+        if let img = shot.image {
+            drawCroppedPhoto(cg: cg, image: img, cropRect: shot.cropRect, into: photoRect)
+        }
+        cg.restoreGState()
+
+        // ── ラベル（下、角丸はbottomのみ） ──
+        cg.saveGState()
+        let labelClip = UIBezierPath(
+            roundedRect: labelRect,
+            byRoundingCorners: [.bottomLeft, .bottomRight],
+            cornerRadii: CGSize(width: r, height: r))
+        cg.addPath(labelClip.cgPath)
+        cg.clip()
+        cg.setFillColor(design.teacherBgUI.cgColor)
+        cg.fill(labelRect)
+        cg.restoreGState()
+
+        // ラベル上端のアクセント線（児童セルより少し太め）
+        cg.setStrokeColor(design.accentUI.withAlphaComponent(0.88).cgColor)
+        cg.setLineWidth(1.2)
+        cg.beginPath()
+        cg.move(to: CGPoint(x: labelRect.minX, y: labelRect.minY))
+        cg.addLine(to: CGPoint(x: labelRect.maxX, y: labelRect.minY))
+        cg.strokePath()
+
+        // ── 「担」マーク（左、アクセント色） ──
+        let pad = rect.width * 0.05
+        let markStr = "担"
+        let markFontSize = labelH * 0.32
+        let markFont = makeFont(size: markFontSize, bold: true)
+        let markWidth = textWidth(markStr, font: markFont)
+        let markRect = CGRect(x: labelRect.minX + pad,
+                              y: labelRect.minY,
+                              width: markWidth,
+                              height: labelH)
+        drawText(cg: cg, text: markStr, rect: markRect,
+                 fontSize: markFontSize, color: design.accentUI,
+                 alignment: .left, verticalAlign: .middle, bold: true)
+
+        // ── 担任名（右） ──
+        let displayName = member.map { roster.displayName(for: $0) } ?? ""
+        let nameX = labelRect.minX + pad + markWidth + pad
+        let availW = labelRect.maxX - pad - nameX
+        let maxNameFontSize = labelH * 0.55
+        let nameFont = fitFont(text: displayName.isEmpty ? "—" : displayName,
+                               maxWidth: availW,
+                               maxSize: maxNameFontSize,
+                               minSize: maxNameFontSize * 0.5)
+        let nameRect = CGRect(x: nameX, y: labelRect.minY,
+                              width: availW, height: labelH)
+        drawText(cg: cg, text: displayName,
+                 rect: nameRect, fontSize: nameFont.pointSize,
+                 color: .white,
+                 alignment: .left, verticalAlign: .middle, bold: true)
     }
 
     // MARK: - 写真描画

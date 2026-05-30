@@ -232,7 +232,23 @@ struct PosterDesignView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Toggle("担任の写真を入れる", isOn: $config.useTeacherPhoto)
+                .disabled(!config.includeTeacher || !hasAnyTeacherPhoto)
+            if config.useTeacherPhoto && !hasAnyTeacherPhoto {
+                Text("担任の写真が撮影されていません。撮影画面で担任を撮影してください。")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if config.useTeacherPhoto {
+                Text("担任セルが児童セルと同じ写真＋ラベル形式になります。地の色は担任色（青系）のまま。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+
+    /// 担任 shot のいずれかに画像があるか
+    private var hasAnyTeacherPhoto: Bool {
+        state.shots.contains { $0.kind == .teacher && $0.image != nil }
     }
 
     private var generateSection: some View {
