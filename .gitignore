@@ -10,6 +10,8 @@
 *.PNG
 *.heic
 *.HEIC
+# ただしアプリアイコン等のアセットは追跡する
+!capture-app/ClassPhotoCapture.swiftpm/Assets.xcassets/**/*.png
 # 名簿
 *.xls
 *.xlsx
