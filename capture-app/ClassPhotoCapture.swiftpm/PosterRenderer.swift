@@ -120,14 +120,31 @@ enum PosterRenderer {
         let availableH = (pageSize.height - mt - hh - mb) - CGFloat(useRows - 1) * gr
         let ch = availableH / CGFloat(useRows)
 
+        // ── 担任の扱い ──
+        // 写真ありモード: 担任をセルとして児童と並べる（撮影写真が必要）。
+        // 写真なしモード: 担任名をヘッダー左上に書き、セルにはしない（本体準拠の意図）。
+        //   ※名前は撮影の有無に関わらず名簿（roster.teachers）から取る。
+        let teacherCellsEnabled = config.useTeacherPhoto && !teachers.isEmpty
+        let teacherHeaderText: String? = {
+            guard config.includeTeacher, !config.useTeacherPhoto,
+                  !roster.teachers.isEmpty else { return nil }
+            let names = roster.teachers
+                .sorted { $0.number < $1.number }
+                .map { roster.displayName(for: $0) }
+                .filter { !$0.isEmpty }
+            return names.isEmpty ? nil : names.joined(separator: "　")
+        }()
+
         // ── ヘッダー ──
         drawHeader(cg: cg, pageSize: pageSize, marginX: mx, marginTop: mt, headerH: hh,
-                   total: students.count, design: config.design, group: group)
+                   total: students.count, design: config.design, group: group,
+                   teacherText: teacherHeaderText)
 
         // ── グリッド ──
         let gt = mt + hh + mm(2)  // ヘッダーの少し下
-        let cells: [(StudentShot, MemberRole)] = teachers.map { ($0, .teacher) }
-                                               + students.map { ($0, .student) }
+        let cells: [(StudentShot, MemberRole)] =
+            (teacherCellsEnabled ? teachers.map { ($0, .teacher) } : [])
+            + students.map { ($0, .student) }
 
         for (idx, (shot, role)) in cells.enumerated() {
             let col = idx % useCols
@@ -170,11 +187,13 @@ enum PosterRenderer {
                                    headerH: CGFloat,
                                    total: Int,
                                    design: PosterDesign,
-                                   group: GroupConfig) {
+                                   group: GroupConfig,
+                                   teacherText: String?) {
         let mm = PosterLayout.mm
         let top = marginTop - mm(1.4)
         let accentH = max(2.5, headerH / 14.0)
         let mainRect = CGRect(x: 0, y: top, width: pageSize.width, height: headerH)
+        let subWidth = pageSize.width * 0.28
 
         // 主帯
         cg.setFillColor(design.headerBgUI.cgColor)
@@ -186,8 +205,30 @@ enum PosterRenderer {
         // 左の副帯
         cg.setFillColor(design.headerSubUI.cgColor)
         cg.fill(CGRect(x: 0, y: top,
-                       width: pageSize.width * 0.28,
+                       width: subWidth,
                        height: headerH - accentH))
+
+        // 左副帯に担任名（写真なしモードのみ）。「担任　○○」
+        if let teacherText {
+            let pad = marginX
+            let labelRect = CGRect(x: pad, y: top,
+                                   width: subWidth - pad * 1.5,
+                                   height: (headerH - accentH) * 0.42)
+            drawText(cg: cg, text: "担任", rect: labelRect,
+                     fontSize: headerH * 0.20, color: design.accentUI,
+                     alignment: .left, verticalAlign: .middle, weight: .bold)
+            let nameRect = CGRect(x: pad, y: top + (headerH - accentH) * 0.40,
+                                  width: subWidth - pad * 1.5,
+                                  height: (headerH - accentH) * 0.52)
+            let nameFont = fitFont(text: teacherText,
+                                   maxWidth: subWidth - pad * 1.5,
+                                   maxSize: headerH * 0.30,
+                                   minSize: headerH * 0.16,
+                                   weight: .semibold)
+            drawText(cg: cg, text: teacherText, rect: nameRect,
+                     fontSize: nameFont.pointSize, color: .white,
+                     alignment: .left, verticalAlign: .middle, weight: .semibold)
+        }
 
         // タイトル（白）
         let title = "\(group.displayName)　\(group.displaySubtitle)"
@@ -199,7 +240,7 @@ enum PosterRenderer {
         )
         drawText(cg: cg, text: title, rect: titleRect,
                  fontSize: headerH * 0.38, color: .white,
-                 alignment: .left, verticalAlign: .middle)
+                 alignment: .left, verticalAlign: .middle, weight: .bold)
 
         // 右上の人数
         let countRect = CGRect(
@@ -211,7 +252,7 @@ enum PosterRenderer {
         drawText(cg: cg, text: "全\(total)名", rect: countRect,
                  fontSize: headerH * 0.24, color: design.accentUI,
                  alignment: .right, verticalAlign: .middle,
-                 bold: true)
+                 weight: .bold)
     }
 
     // MARK: - 児童セル
@@ -275,7 +316,7 @@ enum PosterRenderer {
         let pad = rect.width * 0.05
         let numStr = String(format: "%02d", shot.number)
         let numFontSize = labelH * 0.32
-        let numUI = makeFont(size: numFontSize, bold: true)
+        let numUI = makeFont(size: numFontSize, weight: .bold)
         let numWidth = textWidth(numStr, font: numUI)
         let numRect = CGRect(x: labelRect.minX + pad,
                              y: labelRect.minY,
@@ -283,20 +324,23 @@ enum PosterRenderer {
                              height: labelH)
         drawText(cg: cg, text: numStr, rect: numRect,
                  fontSize: numFontSize, color: design.numberFgUI,
-                 alignment: .left, verticalAlign: .middle, bold: true)
+                 alignment: .left, verticalAlign: .middle, weight: .bold)
 
         // ── 名前 ──
+        // 本体 make_poster.py 準拠: 最大 lh*0.55、幅は min(残り幅, cw*0.80)に収まるよう自動縮小。
+        // 本体の丸ゴに寄せて .semibold（iOSの既定W3だと細く見えるため）。
         let displayName = member.map { roster.displayName(for: $0) } ?? ""
         let nameX = labelRect.minX + pad + numWidth + pad
-        let availW = labelRect.maxX - pad - nameX
+        let availW = min(labelRect.maxX - pad - nameX, rect.width * 0.80)
         let maxNameFontSize = labelH * 0.55
         let nameFont = fitFont(text: displayName.isEmpty ? "—" : displayName,
-                               maxWidth: availW, maxSize: maxNameFontSize, minSize: maxNameFontSize * 0.5)
+                               maxWidth: availW, maxSize: maxNameFontSize,
+                               minSize: maxNameFontSize * 0.32, weight: .semibold)
         let nameRect = CGRect(x: nameX, y: labelRect.minY, width: availW, height: labelH)
         drawText(cg: cg, text: displayName.isEmpty ? "" : displayName,
                  rect: nameRect, fontSize: nameFont.pointSize,
                  color: design.labelFgUI,
-                 alignment: .left, verticalAlign: .middle)
+                 alignment: .left, verticalAlign: .middle, weight: .semibold)
     }
 
     // MARK: - 担任セル
@@ -340,7 +384,7 @@ enum PosterRenderer {
         drawText(cg: cg, text: "担　任", rect: topRect,
                  fontSize: rect.height * 0.11,
                  color: design.accentUI.withAlphaComponent(0.86),
-                 alignment: .center, verticalAlign: .middle, bold: true)
+                 alignment: .center, verticalAlign: .middle, weight: .bold)
 
         // 担任名
         let name = member.map { roster.displayName(for: $0) } ?? ""
@@ -354,7 +398,8 @@ enum PosterRenderer {
         drawText(cg: cg, text: displayed,
                  rect: nameRect, fontSize: nameFont.pointSize,
                  color: .white,
-                 alignment: .center, verticalAlign: .middle, bold: !name.isEmpty)
+                 alignment: .center, verticalAlign: .middle,
+                 weight: name.isEmpty ? .regular : .semibold)
 
         // 下のアクセントバー
         let bar = CGRect(x: rect.minX + rect.width * 0.2,
@@ -424,7 +469,7 @@ enum PosterRenderer {
         let pad = rect.width * 0.05
         let markStr = "担"
         let markFontSize = labelH * 0.32
-        let markFont = makeFont(size: markFontSize, bold: true)
+        let markFont = makeFont(size: markFontSize, weight: .bold)
         let markWidth = textWidth(markStr, font: markFont)
         let markRect = CGRect(x: labelRect.minX + pad,
                               y: labelRect.minY,
@@ -432,7 +477,7 @@ enum PosterRenderer {
                               height: labelH)
         drawText(cg: cg, text: markStr, rect: markRect,
                  fontSize: markFontSize, color: design.accentUI,
-                 alignment: .left, verticalAlign: .middle, bold: true)
+                 alignment: .left, verticalAlign: .middle, weight: .bold)
 
         // ── 担任名（右） ──
         let displayName = member.map { roster.displayName(for: $0) } ?? ""
@@ -442,13 +487,14 @@ enum PosterRenderer {
         let nameFont = fitFont(text: displayName.isEmpty ? "—" : displayName,
                                maxWidth: availW,
                                maxSize: maxNameFontSize,
-                               minSize: maxNameFontSize * 0.5)
+                               minSize: maxNameFontSize * 0.32,
+                               weight: .semibold)
         let nameRect = CGRect(x: nameX, y: labelRect.minY,
                               width: availW, height: labelH)
         drawText(cg: cg, text: displayName,
                  rect: nameRect, fontSize: nameFont.pointSize,
                  color: .white,
-                 alignment: .left, verticalAlign: .middle, bold: true)
+                 alignment: .left, verticalAlign: .middle, weight: .semibold)
     }
 
     // MARK: - 写真描画
@@ -529,17 +575,28 @@ enum PosterRenderer {
     enum HAlign { case left, center, right }
     enum VAlign { case top, middle, bottom }
 
-    /// pt サイズで「ヒラギノ丸ゴ → 通常ヒラギノ → システム」の順にフォール
-    /// バックするフォントを返す。bold=true なら太め (W6) を優先。
-    private static func makeFont(size: CGFloat, bold: Bool = false) -> UIFont {
-        let weight: UIFont.Weight = bold ? .bold : .regular
-        // ヒラギノ丸ゴ ProN — 子ども向け定番。本体（make_poster.py）と一致。
-        let maruName = bold ? "HiraMaruProN-W6" : "HiraMaruProN-W4"
-        if let f = UIFont(name: maruName, size: size) { return f }
-        // 通常のヒラギノ
-        let sansName = bold ? "HiraginoSans-W6" : "HiraginoSans-W3"
-        if let f = UIFont(name: sansName, size: size) { return f }
-        // フォールバック
+    /// 指定ウェイトのフォントを返す。
+    /// 本体 make_poster.py はヒラギノ丸ゴ W4。iOS には丸ゴが無いことが多いので、
+    /// 丸ゴが在れば使い、無ければ「ヒラギノ角ゴ（Hiragino Sans）」を**ウェイト指定**で
+    /// 取得する（既定の W3 へ落ちると名前が細く見えるため、本体の太さに寄せて
+    /// 名前は .semibold 等を渡す）。最後にシステムフォントへフォールバック。
+    private static func makeFont(size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
+        // 丸ゴ（あれば最優先・本体と同系統）
+        if weight.rawValue <= UIFont.Weight.medium.rawValue,
+           let maru = UIFont(name: "HiraMaruProN-W4", size: size) {
+            return maru
+        }
+        if weight.rawValue > UIFont.Weight.medium.rawValue,
+           let maru = UIFont(name: "HiraMaruProN-W6", size: size) {
+            return maru
+        }
+        // ヒラギノ角ゴをウェイト指定で
+        let desc = UIFontDescriptor(fontAttributes: [
+            .family: "Hiragino Sans",
+            .traits: [UIFontDescriptor.TraitKey.weight: weight.rawValue]
+        ])
+        let f = UIFont(descriptor: desc, size: size)
+        if f.familyName.contains("Hiragino") { return f }
         return UIFont.systemFont(ofSize: size, weight: weight)
     }
 
@@ -548,15 +605,15 @@ enum PosterRenderer {
                                 maxWidth: CGFloat,
                                 maxSize: CGFloat,
                                 minSize: CGFloat,
-                                bold: Bool = false) -> UIFont {
-        guard !text.isEmpty else { return makeFont(size: maxSize, bold: bold) }
+                                weight: UIFont.Weight = .regular) -> UIFont {
+        guard !text.isEmpty else { return makeFont(size: maxSize, weight: weight) }
         var size = maxSize
         while size > minSize {
-            let f = makeFont(size: size, bold: bold)
+            let f = makeFont(size: size, weight: weight)
             if textWidth(text, font: f) <= maxWidth { return f }
             size -= 0.5
         }
-        return makeFont(size: minSize, bold: bold)
+        return makeFont(size: minSize, weight: weight)
     }
 
     private static func textWidth(_ s: String, font: UIFont) -> CGFloat {
@@ -571,9 +628,9 @@ enum PosterRenderer {
                                  color: UIColor,
                                  alignment: HAlign,
                                  verticalAlign: VAlign,
-                                 bold: Bool = false) {
+                                 weight: UIFont.Weight = .regular) {
         guard !text.isEmpty else { return }
-        let font = makeFont(size: fontSize, bold: bold)
+        let font = makeFont(size: fontSize, weight: weight)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: color

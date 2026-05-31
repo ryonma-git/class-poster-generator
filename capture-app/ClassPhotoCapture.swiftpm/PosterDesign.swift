@@ -127,11 +127,67 @@ struct PosterDesign: Equatable, Codable {
         teacherBgHex:  0x5BA968
     )
 
-    /// プリセット一覧（UI用）
+    /// 茜（夕焼け・卒業の温かみ）
+    static let akane = PosterDesign(
+        backgroundHex: 0xFFF4EE,
+        cardBgHex:     0xFFFCFA,
+        labelBgHex:    0xC0562B,
+        labelFgHex:    0xFFFFFF,
+        numberFgHex:   0xF5C242,
+        accentHex:     0xF5C242,
+        headerBgHex:   0x9A3C18,
+        headerSubHex:  0xC0562B,
+        teacherBgHex:  0xDB8050
+    )
+
+    /// 藤（藤色・落ち着いた紫）
+    static let fuji = PosterDesign(
+        backgroundHex: 0xF5F2FB,
+        cardBgHex:     0xFCFBFE,
+        labelBgHex:    0x5B4B9E,
+        labelFgHex:    0xFFFFFF,
+        numberFgHex:   0xE8B84B,
+        accentHex:     0xE8B84B,
+        headerBgHex:   0x3F3478,
+        headerSubHex:  0x5B4B9E,
+        teacherBgHex:  0x8576C0
+    )
+
+    /// 空（爽やかな水色）
+    static let sora = PosterDesign(
+        backgroundHex: 0xEDF6FB,
+        cardBgHex:     0xFAFDFF,
+        labelBgHex:    0x1F7FA8,
+        labelFgHex:    0xFFFFFF,
+        numberFgHex:   0xF2A93B,
+        accentHex:     0xF2A93B,
+        headerBgHex:   0x125B7C,
+        headerSubHex:  0x1F7FA8,
+        teacherBgHex:  0x4FA8CC
+    )
+
+    /// 墨（モノトーン・シック）
+    static let sumi = PosterDesign(
+        backgroundHex: 0xF2F3F5,
+        cardBgHex:     0xFBFBFC,
+        labelBgHex:    0x3A4048,
+        labelFgHex:    0xFFFFFF,
+        numberFgHex:   0xC9A24B,
+        accentHex:     0xC9A24B,
+        headerBgHex:   0x22272E,
+        headerSubHex:  0x3A4048,
+        teacherBgHex:  0x6C757E
+    )
+
+    /// プリセット一覧（UI用）。先頭が既定（青）。
     static let presets: [(name: String, value: PosterDesign)] = [
-        ("標準（青）", .default),
-        ("桜",         .sakura),
-        ("若葉",       .wakaba),
+        ("青",   .default),
+        ("空",   .sora),
+        ("若葉", .wakaba),
+        ("桜",   .sakura),
+        ("茜",   .akane),
+        ("藤",   .fuji),
+        ("墨",   .sumi),
     ]
 
     // ── 表示用（SwiftUI / UIKit） ──

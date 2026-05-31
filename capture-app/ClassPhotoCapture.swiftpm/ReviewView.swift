@@ -100,7 +100,7 @@ struct ReviewView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .tint(.purple)
+            .tint(brandColor)
             .disabled(isExporting || isSavingPhotos || state.capturedCount == 0)
 
             // ② 写真ライブラリへの書き出し

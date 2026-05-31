@@ -261,37 +261,38 @@ struct SetupView: View {
     private var startSection: some View {
         Section {
             if captureInProgress {
-                // 撮影中に設定を見に来たケース：データを保持して戻る
+                // 人数・担任など設定変更を反映する（撮影済みは番号ごとに引き継ぐ）
                 Button {
-                    state.resumeCapture()
+                    state.startCapture()
                 } label: {
                     HStack {
                         Spacer()
-                        Label("撮影に戻る（済 \(state.capturedCount) 名）",
-                              systemImage: "camera.fill")
+                        Label("この設定で更新する（\(state.studentCount)＋\(state.teacherCount)）",
+                              systemImage: "arrow.triangle.2.circlepath")
                             .font(.headline)
                         Spacer()
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .tint(brandColor)
                 .disabled(!isReady)
+                Text("人数や担任を変えたら必ずこちら。新しい人数で撮影リストを作り直します（撮影済みの写真は番号ごとに引き継がれます）。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
+                // 設定を変えずに撮影へ戻る
                 Button {
-                    // 人数など設定変更を反映しつつ撮影済みは引き継ぐ
-                    state.startCapture()
+                    state.resumeCapture()
                 } label: {
                     HStack {
                         Spacer()
-                        Text("この設定で撮影リストを更新する")
+                        Text("設定を変更せずに戻る（済 \(state.capturedCount) 名）")
                             .font(.subheadline)
                         Spacer()
                     }
                 }
                 .disabled(!isReady)
-                Text("人数や担任を変えたときはこちら。撮影済みの写真は番号ごとに引き継がれます。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             } else {
                 Button {
                     state.startCapture()

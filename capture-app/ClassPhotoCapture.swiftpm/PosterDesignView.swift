@@ -84,13 +84,13 @@ struct PosterDesignView: View {
 
     private var paperSection: some View {
         Section("用紙サイズ") {
-            Picker("シリーズ", selection: $config.paper) {
+            Picker("用紙", selection: $config.paper) {
                 ForEach(PaperSize.allCases) { p in
                     Text(p.displayName).tag(p)
                 }
             }
             .pickerStyle(.menu)
-            Text("印刷時はプリンターで「実寸（100%）」を指定してください。\n2026年度の標準は **A1（594×841mm）** です。")
+            Text("印刷時はプリンターで「実寸（100%）」を指定してください。\n標準は **A1（594×841mm）** です。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -98,22 +98,14 @@ struct PosterDesignView: View {
 
     private var designSection: some View {
         Section("配色プリセット") {
-            Picker("プリセット", selection: $presetIndex) {
-                ForEach(Array(PosterDesign.presets.enumerated()), id: \.offset) { idx, item in
-                    Text(item.name).tag(idx)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(Array(PosterDesign.presets.enumerated()), id: \.offset) { idx, item in
+                        presetSwatch(idx: idx, name: item.name, design: item.value)
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .pickerStyle(.segmented)
-            // 色のサムネ
-            HStack(spacing: 6) {
-                colorChip(config.design.headerBg, label: "ヘッダー")
-                colorChip(config.design.labelBg,  label: "ラベル")
-                colorChip(config.design.numberFg, label: "番号")
-                colorChip(config.design.teacherBg, label: "担任")
-                colorChip(config.design.background, label: "背景", border: true)
-            }
-            .padding(.top, 4)
-
             Toggle("詳細にカスタマイズ", isOn: $showDetailColors.animation())
                 .font(.subheadline)
         }
@@ -225,21 +217,25 @@ struct PosterDesignView: View {
 
     private var teacherSection: some View {
         Section("担任") {
-            Toggle("担任を含める", isOn: $config.includeTeacher)
+            Toggle("担任の名前を含める", isOn: $config.includeTeacher)
                 .disabled(state.roster.teachers.isEmpty)
             if state.roster.teachers.isEmpty {
                 Text("担任の名簿が未設定です。「名簿」で担任名を入力してください。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if config.includeTeacher && !config.useTeacherPhoto {
+                Text("担任の名前をポスター上部（左上）に表示します。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Toggle("担任の写真を入れる", isOn: $config.useTeacherPhoto)
+            Toggle("担任の写真も入れる", isOn: $config.useTeacherPhoto)
                 .disabled(!config.includeTeacher || !hasAnyTeacherPhoto)
             if config.useTeacherPhoto && !hasAnyTeacherPhoto {
                 Text("担任の写真が撮影されていません。撮影画面で担任を撮影してください。")
                     .font(.caption)
                     .foregroundStyle(.orange)
             } else if config.useTeacherPhoto {
-                Text("担任セルが児童セルと同じ写真＋ラベル形式になります。地の色は担任色（青系）のまま。")
+                Text("担任を写真付きのセルとして児童と並べて表示します（地の色は担任色）。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -302,6 +298,43 @@ struct PosterDesignView: View {
     }
 
     // MARK: - ヘルパ
+
+    /// プリセット1つ分のスウォッチ（ヘッダー/ラベル/番号の3色を小さく重ねて表示）
+    private func presetSwatch(idx: Int, name: String, design: PosterDesign) -> some View {
+        let selected = presetIndex == idx
+        return Button {
+            presetIndex = idx
+        } label: {
+            VStack(spacing: 5) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(design.background)
+                    VStack(spacing: 0) {
+                        Rectangle().fill(design.headerBg).frame(height: 12)
+                        Spacer(minLength: 0)
+                        Rectangle().fill(design.labelBg).frame(height: 12)
+                            .overlay(alignment: .leading) {
+                                Circle().fill(design.numberFg)
+                                    .frame(width: 5, height: 5)
+                                    .padding(.leading, 4)
+                            }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                }
+                .frame(width: 52, height: 60)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9)
+                        .stroke(selected ? brandColor : Color.secondary.opacity(0.25),
+                                lineWidth: selected ? 3 : 1)
+                )
+                Text(name)
+                    .font(.caption)
+                    .fontWeight(selected ? .bold : .regular)
+                    .foregroundStyle(selected ? brandColor : .secondary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
 
     private func colorChip(_ color: Color, label: String, border: Bool = false) -> some View {
         VStack(spacing: 3) {

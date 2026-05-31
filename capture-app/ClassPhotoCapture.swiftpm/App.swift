@@ -31,7 +31,6 @@ struct RootView: View {
         case .review:
             ReviewView()
         case .rosterEditor, .posterDesign:
-            // Phase 2/3 で実装予定。それまでは setup へフォールバック。
             SetupView()
                 .onAppear { state.screen = .setup }
         }

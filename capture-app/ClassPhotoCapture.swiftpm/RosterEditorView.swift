@@ -133,7 +133,7 @@ struct RosterEditorView: View {
         } header: {
             Text("児童・生徒  \(state.roster.students.count)名")
         } footer: {
-            Text("Return で次の人へ、外付けキーボードの Tab で漢字↔ふりがなを移動できます。")
+            Text("Return キーで「漢字 → ふりがな → 次の人」と順に進めます。キーボード上の ▲▼ でも前後に移動できます。")
                 .font(.caption)
         }
     }
@@ -164,15 +164,15 @@ struct RosterEditorView: View {
                 .frame(width: 56, alignment: .leading)
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 6) {
-                // 漢字（上）
+                // 漢字（上）— Return で同じ人のふりがな欄へ
                 TextField("漢字（例: 田中 太郎）", text: bind(member, \.name))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focused, equals: kanjiField)
                     .submitLabel(.next)
-                    .onSubmit { advanceToNextPerson(after: member.number, role: role) }
+                    .onSubmit { focused = furiField }
                 Divider()
-                // ふりがな（下）＋ 自動生成
+                // ふりがな（下）＋ 自動生成 — Return で次の人の漢字欄へ
                 HStack(spacing: 6) {
                     TextField("ふりがな（例: たなか たろう）", text: bind(member, \.furigana))
                         .textInputAutocapitalization(.never)
