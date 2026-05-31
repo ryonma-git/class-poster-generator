@@ -63,7 +63,8 @@ enum XLSXImporter {
 
 // MARK: - 最小 ZIP リーダ
 
-private enum MinimalZip {
+// ZIP 展開ユーティリティ（XLSX / .cpcap 共用）
+enum MinimalZip {
     /// ZIP の中身を [パス: 展開後データ] で返す
     static func entries(from data: Data) throws -> [String: Data] {
         let bytes = [UInt8](data)

@@ -1,10 +1,12 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // ════════════════════════════════════════════════════════════════
 //  HomeView — 表紙
 //
 //  - 新しく撮影する → 設定画面へ（新規プロジェクト）
 //  - 保存した撮影を開く → プロジェクト一覧へ
+//  - ファイルから開く → .cpcap を取り込んでプロジェクト化
 //
 //  複数クラスを順に撮れるよう、保存済みプロジェクトの件数も表示。
 // ════════════════════════════════════════════════════════════════
@@ -12,6 +14,8 @@ import SwiftUI
 struct HomeView: View {
     @EnvironmentObject var state: AppState
     @State private var summaries: [ProjectSummary] = []
+    @State private var showFileImporter = false
+    @State private var importError: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -45,6 +49,17 @@ struct HomeView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.large)
                         .disabled(summaries.isEmpty)
+
+                        // ファイル（.cpcap）から開く
+                        Button {
+                            showFileImporter = true
+                        } label: {
+                            actionLabel(icon: "doc.badge.arrow.up",
+                                        title: "ファイルから開く（.cpcap）",
+                                        subtitle: "AirDrop やファイルアプリで受け取った撮影データを読み込む")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
                     }
                     .padding(.horizontal)
 
@@ -59,6 +74,39 @@ struct HomeView: View {
             }
             .navigationTitle("")
             .onAppear { summaries = ProjectStore.loadSummaries() }
+            .fileImporter(isPresented: $showFileImporter,
+                          allowedContentTypes: cpcapTypes,
+                          allowsMultipleSelection: false) { result in
+                handleImport(result)
+            }
+            .alert("取り込みエラー", isPresented: .constant(importError != nil)) {
+                Button("OK") { importError = nil }
+            } message: { Text(importError ?? "") }
+        }
+    }
+
+    /// .cpcap（独自拡張子）＋ .zip を受け付ける
+    private var cpcapTypes: [UTType] {
+        var types: [UTType] = []
+        if let cpcap = UTType(filenameExtension: "cpcap") { types.append(cpcap) }
+        types.append(.zip)
+        types.append(.data)   // 拡張子が認識されない環境向けの保険
+        return types
+    }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            do {
+                let id = try CpcapImporter.importFile(at: url)
+                summaries = ProjectStore.loadSummaries()
+                state.openProject(id: id)   // 取り込んだら確認画面へ
+            } catch {
+                importError = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            }
+        case .failure(let err):
+            importError = "ファイル選択に失敗しました: \(err.localizedDescription)"
         }
     }
 
@@ -126,6 +174,8 @@ struct ProjectListView: View {
     @EnvironmentObject var state: AppState
     @State private var summaries: [ProjectSummary] = []
     @State private var pendingDelete: ProjectSummary? = nil
+    @State private var showFileImporter = false
+    @State private var importError: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -171,7 +221,32 @@ struct ProjectListView: View {
                         state.screen = .home
                     } label: { Label("ホーム", systemImage: "house") }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showFileImporter = true
+                    } label: { Label("ファイルから取り込み", systemImage: "doc.badge.arrow.up") }
+                }
             }
+            .fileImporter(isPresented: $showFileImporter,
+                          allowedContentTypes: {
+                              var t: [UTType] = []
+                              if let c = UTType(filenameExtension: "cpcap") { t.append(c) }
+                              t.append(.zip); t.append(.data); return t
+                          }(),
+                          allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    do {
+                        let id = try CpcapImporter.importFile(at: url)
+                        summaries = ProjectStore.loadSummaries()
+                        state.openProject(id: id)
+                    } catch {
+                        importError = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    }
+                }
+            }
+            .alert("取り込みエラー", isPresented: .constant(importError != nil)) {
+                Button("OK") { importError = nil }
+            } message: { Text(importError ?? "") }
             .onAppear { summaries = ProjectStore.loadSummaries() }
             .alert("この撮影を削除しますか？",
                    isPresented: .constant(pendingDelete != nil),
