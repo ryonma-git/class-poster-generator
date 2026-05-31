@@ -57,9 +57,19 @@ struct CaptureView: View {
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.16)
                     .allowsHitTesting(false)
 
-                // 左上: 設定へ戻る / 最初からやり直す
+                // 左上: ホーム / 設定へ戻る / 最初からやり直す
                 VStack {
                     HStack(spacing: 8) {
+                        Button {
+                            state.goHome()
+                        } label: {
+                            Label("ホーム", systemImage: "house")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(.black.opacity(0.4), in: Capsule())
+                        }
                         Button {
                             state.backToSetup()
                         } label: {
@@ -452,12 +462,16 @@ struct CaptureView: View {
 
     private func confirmOK() {
         if let shot = state.currentShot {
+            // 撮り直しの場合は古い保存画像を消して、新しい画像が確実に書かれるようにする
+            let fname = "\(shot.fileStem(group: state.group)).jpg"
+            ProjectStore.deleteImageFile(id: state.currentProjectID, fileName: fname)
             shot.image = confirmImage
             shot.cropRect = confirmCrop
             shot.status = .captured
         }
         confirmImage = nil
         confirmCrop = nil
+        state.saveCurrentProject()   // 1枚ごとに自動保存（途中で閉じても残る）
         state.advanceToNextPending()
     }
 
@@ -472,6 +486,7 @@ struct CaptureView: View {
             shot.image = nil
             shot.cropRect = nil
         }
+        state.saveCurrentProject()
         state.advanceToNextPending()
     }
 }

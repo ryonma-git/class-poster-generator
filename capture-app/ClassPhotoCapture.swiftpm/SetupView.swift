@@ -39,7 +39,15 @@ struct SetupView: View {
                 tipsSection
                 startSection
             }
-            .navigationTitle("クラス写真キャプチャ")
+            .navigationTitle("撮影の設定")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        state.goHome()
+                    } label: { Label("ホーム", systemImage: "house") }
+                }
+            }
             .onAppear {
                 // 既存値から classKind を復元
                 if case .letter = state.group.classLabel { classKind = .letter }

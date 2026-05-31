@@ -24,6 +24,10 @@ struct RootView: View {
 
     var body: some View {
         switch state.screen {
+        case .home:
+            HomeView()
+        case .projectList:
+            ProjectListView()
         case .setup:
             SetupView()
         case .capture:

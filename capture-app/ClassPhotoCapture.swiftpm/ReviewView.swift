@@ -38,7 +38,13 @@ struct ReviewView: View {
                 exportBanner
             }
             .navigationTitle("確認・書き出し")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        state.goHome()
+                    } label: { Label("ホーム", systemImage: "house") }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         state.screen = .capture
@@ -54,6 +60,7 @@ struct ReviewView: View {
                     .disabled(isExporting || state.capturedCount == 0)
                 }
             }
+            .onAppear { state.saveCurrentProject() }
             .sheet(item: $previewing) { shot in
                 ShotPreviewSheet(shot: shot,
                                  onClose: { previewing = nil },

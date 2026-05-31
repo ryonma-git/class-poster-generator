@@ -12,6 +12,8 @@ import SwiftUI
 // ════════════════════════════════════════════════════════════════
 
 enum Screen {
+    case home           // 表紙（新規／保存済みから選ぶ）
+    case projectList    // 保存した撮影の一覧
     case setup
     case capture
     case review
@@ -20,7 +22,13 @@ enum Screen {
 }
 
 final class AppState: ObservableObject {
-    @Published var screen: Screen = .setup
+    @Published var screen: Screen = .home
+
+    // ── プロジェクト（複数クラス対応） ──
+    /// 現在編集中のプロジェクトID。新規作成時に採番。
+    @Published var currentProjectID: String = ProjectStore.newID()
+    /// 現在プロジェクトの作成日時（保存時に維持）
+    private var currentCreatedAt: Double = Date().timeIntervalSince1970
 
     // ── 集団設定（旧 grade/cls/teacherCount を内包） ──
     @Published var group: GroupConfig = GroupConfig()
@@ -147,5 +155,64 @@ final class AppState: ObservableObject {
             roster = Roster()
         }
         screen = .setup
+    }
+
+    // MARK: - プロジェクト（複数クラス）
+
+    /// 新規プロジェクトを作って設定画面へ。
+    func newProject() {
+        currentProjectID = ProjectStore.newID()
+        currentCreatedAt = Date().timeIntervalSince1970
+        group = GroupConfig()
+        studentCount = 35
+        teacherCount = 1
+        imageFormat = .jpeg
+        roster = Roster()
+        shots = []
+        currentIndex = 0
+        screen = .setup
+    }
+
+    /// 保存済みプロジェクトを開く。撮影済みがあれば確認画面、無ければ設定へ。
+    func openProject(id: String) {
+        guard let loaded = ProjectStore.load(id: id) else { return }
+        let f = loaded.file
+        currentProjectID = f.id
+        currentCreatedAt = f.createdAt
+        group = f.group
+        studentCount = f.studentCount
+        teacherCount = f.teacherCount
+        imageFormat = ImageFormat(rawValue: f.imageFormat) ?? .jpeg
+        roster = f.roster
+        shots = loaded.shots
+        currentIndex = shots.firstIndex(where: { $0.status == .pending }) ?? 0
+        // 撮影が1枚でもあれば確認画面、無ければ設定画面
+        let hasAny = shots.contains { $0.status != .pending }
+        screen = hasAny ? .review : .setup
+    }
+
+    /// 現在の状態をディスクへ保存（撮影リストが空なら保存しない）。
+    func saveCurrentProject() {
+        guard !shots.isEmpty else { return }
+        ProjectStore.save(
+            id: currentProjectID,
+            group: group,
+            roster: roster,
+            studentCount: studentCount,
+            teacherCount: teacherCount,
+            imageFormat: imageFormat,
+            shots: shots,
+            createdAt: currentCreatedAt
+        )
+    }
+
+    /// ホームへ戻る（自動保存してから）。
+    func goHome() {
+        saveCurrentProject()
+        screen = .home
+    }
+
+    func deleteProject(id: String) {
+        ProjectStore.delete(id: id)
     }
 }
