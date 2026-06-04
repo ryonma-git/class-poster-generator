@@ -277,25 +277,31 @@ enum CSVImporter {
         var result: [Int: ImportField] = [:]
 
         if hasHeaderRow {
-            for (i, name) in headers.enumerated() {
-                let n = name
-                    .replacingOccurrences(of: "　", with: "")
-                    .replacingOccurrences(of: " ", with: "")
-                    .lowercased()
-                if matches(n, ["ふりがな", "フリガナ", "よみ", "yomi", "kana", "かな"]) {
-                    result[i] = .furigana
-                } else if matches(n, ["氏名", "名前", "name", "生徒名", "児童名"]) {
-                    result[i] = .kanji
-                } else if matches(n, ["番号", "出席番号", "no.", "no", "number", "#"]) {
-                    result[i] = .number
-                } else if matches(n, ["学年", "grade"]) {
-                    result[i] = .grade
-                } else if matches(n, ["組", "cls", "class"]) {
-                    result[i] = .cls
-                } else {
-                    result[i] = .ignore
-                }
+            // 正規化した見出し
+            let norm = headers.map {
+                $0.replacingOccurrences(of: "　", with: "")
+                  .replacingOccurrences(of: " ", with: "")
+                  .lowercased()
             }
+            // 各列を ignore で初期化
+            for i in 0..<headers.count { result[i] = .ignore }
+
+            // 役割ごとに「最もスコアの高い列」を1つ選ぶ。
+            // これにより C4th 名簿のように「姓ふりがな/名ふりがな/ふりがな」が併存しても
+            // フル氏名・フルふりがなの列を正しく選べる。
+            func assignBest(_ field: ImportField, _ score: (String) -> Int) {
+                var bestIdx = -1, bestScore = 0
+                for (i, n) in norm.enumerated() {
+                    let s = score(n)
+                    if s > bestScore { bestScore = s; bestIdx = i }
+                }
+                if bestIdx >= 0 { result[bestIdx] = field }
+            }
+            assignBest(.number,   scoreNumber)
+            assignBest(.grade,    scoreGrade)
+            assignBest(.cls,      scoreCls)
+            assignBest(.kanji,    scoreKanji)
+            assignBest(.furigana, scoreFurigana)
         } else {
             // ヘッダーなし：本体（make_poster.py）の慣習列にマップ
             // C(2)=学年, D(3)=組, E(4)=番号, R(17)=ふりがな
@@ -330,6 +336,63 @@ enum CSVImporter {
             if s.contains(c.lowercased()) { return true }
         }
         return false
+    }
+
+    // MARK: - 列スコアリング（C4th 等で正しい列を選ぶ）
+    //
+    // すべて正規化済み（空白除去・小文字）の見出し文字列 h を受け取り、
+    // その役割としての「ふさわしさ」を整数で返す。0 以下は不採用。
+
+    private static func has(_ h: String, _ ks: [String]) -> Bool { ks.contains { h.contains($0) } }
+    private static let furiKeys = ["ふりがな", "ふり仮名", "フリガナ", "ﾌﾘｶﾞﾅ", "よみがな", "よみ", "ヨミ", "かな", "カナ", "yomi", "kana"]
+
+    /// 出席番号: 郵便/電話/FAX/管理/コード/学級番号 等は強く除外
+    private static func scoreNumber(_ h: String) -> Int {
+        if has(h, ["郵便", "電話", "fax", "ﾌｧｸｽ", "指導要録", "管理", "支援", "コード", "ｺｰﾄﾞ", "id"]) { return 0 }
+        if has(h, furiKeys) { return 0 }
+        if h == "出席番号" || h.contains("出席") { return 100 }
+        if h == "番号" || h == "no" || h == "no." { return 90 }
+        if h.contains("番号") { return 60 }
+        if h.contains("number") || h == "#" { return 50 }
+        return 0
+    }
+
+    private static func scoreGrade(_ h: String) -> Int {
+        if has(h, furiKeys) { return 0 }
+        if h == "学年" { return 100 }
+        if h.contains("学年") { return 80 }
+        if h.contains("grade") { return 70 }
+        return 0
+    }
+
+    /// 組: 学級番号・支援学級などは除外し、純粋な「組/学級/クラス」を選ぶ
+    private static func scoreCls(_ h: String) -> Int {
+        if has(h, ["番号", "支援"]) || has(h, furiKeys) { return 0 }
+        if h == "組" || h == "学級" || h == "クラス" { return 100 }
+        if h.contains("組") || h.contains("学級") || h.contains("クラス") { return 70 }
+        if h == "cls" || h.contains("class") { return 60 }
+        return 0
+    }
+
+    /// 氏名（漢字）: ふりがな列は除外。「名前/氏名」フル名を最優先、姓・名単独は最後の手段。
+    private static func scoreKanji(_ h: String) -> Int {
+        if has(h, furiKeys) { return 0 }                      // 読み列は対象外
+        if h.contains("正式") { return 0 }                     // 「正式名前」は通常使わない
+        if h == "氏名" || h == "名前" || h == "生徒氏名" || h == "児童氏名" { return 100 }
+        if h.contains("氏名") || h.contains("名前") { return 90 }
+        if h.contains("生徒名") || h.contains("児童名") || h.contains("name") { return 60 }
+        if h == "姓" || h == "名" { return 20 }                 // 分割列は最後の手段
+        return 0
+    }
+
+    /// ふりがな: フル読みを最優先。「姓ふりがな/名ふりがな」など分割や「正式」は低スコア。
+    private static func scoreFurigana(_ h: String) -> Int {
+        guard has(h, furiKeys) else { return 0 }
+        if h.contains("正式") { return 30 }                    // 正式名前ふりがな等は控えめ
+        if h == "ふりがな" || h == "フリガナ" || h == "よみがな" { return 100 }
+        if h.contains("名前") || h.contains("氏名") { return 90 } // 名前ふりがな = フル
+        if h.contains("姓") || h.contains("名") { return 40 }    // 姓ふりがな/名ふりがな = 分割
+        return 70
     }
 
     /// Excel 列名（A, B, C, ..., AA, AB...）
