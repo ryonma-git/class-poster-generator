@@ -16,10 +16,8 @@ struct SetupView: View {
     @State private var classKind: ClassKind = .number
     /// 名簿エディタの表示
     @State private var showRoster = false
-    /// 人数の数値入力フィールドのフォーカス
-    @FocusState private var countFieldFocused: Bool
 
-    /// 人数（範囲内にクランプして反映）。+/- と数値入力の両方から使う。
+    /// 人数（範囲内にクランプして反映）。+/- とテンキー入力の両方から使う。
     private var studentCountBinding: Binding<Int> {
         Binding(
             get: { state.studentCount },
@@ -57,10 +55,6 @@ struct SetupView: View {
                     Button {
                         state.goHome()
                     } label: { Label("ホーム", systemImage: "house") }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完了") { countFieldFocused = false }
                 }
             }
             .onAppear {
@@ -218,26 +212,21 @@ struct SetupView: View {
 
     private var countSection: some View {
         Section {
+            // テンキーで直接入力（タップで数字パッド）
+            NumberKeypadButton(title: "人数", unit: "人",
+                               range: state.countRange, value: studentCountBinding)
+            // +/- でも調整可能
             Stepper(value: studentCountBinding, in: state.countRange) {
-                HStack(spacing: 8) {
-                    Text("人数")
-                    Spacer()
-                    // 数値直接入力（+/- と併用）
-                    TextField("人数", value: studentCountBinding, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 64)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($countFieldFocused)
-                    Text("人").foregroundStyle(.secondary)
-                }
+                Text("＋ / − で調整")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
             Text(state.group.mode == .school
-                 ? "出席番号 1 〜 \(state.studentCount) で順番に撮影します。数字を直接入力もできます。"
+                 ? "出席番号 1 〜 \(state.studentCount) で順番に撮影します（最大 \(state.countRange.upperBound) 人）。"
                  : "管理番号 1 〜 \(state.studentCount) で順番に撮影します（個人名は名簿で設定）。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        } header: { Text("人数（\(state.countRange.lowerBound)〜\(state.countRange.upperBound)）") }
+        } header: { Text("人数（\(state.countRange.lowerBound)〜\(state.countRange.upperBound)人）") }
     }
 
     // MARK: - 担任
