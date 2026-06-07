@@ -19,28 +19,34 @@ struct NumberKeypadButton: View {
     @State private var showPad = false
 
     var body: some View {
-        Button {
-            showPad = true
-        } label: {
-            HStack(spacing: 8) {
-                Text(title)
-                Spacer()
+        HStack(spacing: 8) {
+            Text(title)
+            Spacer()
+            // 数字チップ。吹き出し（ポップオーバー）はこの数字を指す。
+            HStack(spacing: 4) {
                 Text("\(value)")
                     .font(.title3.bold().monospacedDigit())
                     .foregroundStyle(.primary)
-                Text(unit).foregroundStyle(.secondary)
                 Image(systemName: "square.grid.3x3.fill")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(brandColor)
             }
-            .contentShape(Rectangle())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(brandColor.opacity(0.4), lineWidth: 1))
+            .popover(isPresented: $showPad,
+                     attachmentAnchor: .rect(.bounds),
+                     arrowEdge: .top) {
+                NumberKeypadPad(value: $value, range: range, unit: unit,
+                                title: title, isPresented: $showPad)
+                    .frame(minWidth: 280, minHeight: 380)
+            }
+            Text(unit).foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showPad) {
-            NumberKeypadPad(value: $value, range: range, unit: unit,
-                            title: title, isPresented: $showPad)
-                .frame(minWidth: 280, minHeight: 380)
-        }
+        .contentShape(Rectangle())
+        .onTapGesture { showPad = true }
     }
 }
 
